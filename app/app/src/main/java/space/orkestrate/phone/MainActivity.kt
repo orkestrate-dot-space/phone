@@ -59,8 +59,9 @@ class MainActivity : Activity(), Relay.Listener {
   override fun onCreate(b: Bundle?) {
     super.onCreate(b)
     setContentView(R.layout.activity_main)
-    store = Store(this)
-    relay = Relay(this, store)
+    val app = application as PhoneApp
+    store = app.store
+    relay = app.relay
     relay.listener = this
 
     dot = findViewById(R.id.dot)
@@ -90,7 +91,7 @@ class MainActivity : Activity(), Relay.Listener {
       relay.pair(r, c) { ok, msg ->
         runOnUiThread {
           log(msg)
-          if (ok) { codeIn.setText(""); refreshAll(); relay.connect() }
+          if (ok) { codeIn.setText(""); refreshAll(); (application as PhoneApp).ensureService() }
         }
       }
     }
@@ -98,9 +99,18 @@ class MainActivity : Activity(), Relay.Listener {
       advBox.visibility = if (advBox.visibility == View.GONE) View.VISIBLE else View.GONE
     }
     findViewById<Button>(R.id.unpairBtn).setOnClickListener {
-      relay.disconnect(); store.clear(); refreshAll(); log("unpaired")
+      relay.disconnect(); store.clear()
+      stopService(Intent(this, RelayService::class.java))
+      refreshAll(); log("unpaired")
     }
     findViewById<Button>(R.id.updateBtn).setOnClickListener { checkUpdate() }
+    findViewById<Button>(R.id.bgBtn).setOnClickListener {
+      try {
+        startActivity(Intent(
+          android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+          android.net.Uri.parse("package:$packageName")))
+      } catch (e: Exception) { log("battery prompt failed: ${e.message}") }
+    }
     findViewById<Button>(R.id.relaySave).setOnClickListener {
       val r = findViewById<EditText>(R.id.relayEdit).text.toString().trim()
       if (r.isBlank()) { log("relay address empty"); return@setOnClickListener }
@@ -108,13 +118,13 @@ class MainActivity : Activity(), Relay.Listener {
       store.relayHttp = r.trimEnd('/')
       refreshAll()
       log("relay → ${store.relayHttp}")
-      relay.connect()
+      (application as PhoneApp).ensureService()
     }
 
     // phone://pair?code=XXXXXXXX&relay=http://host:port
     handleDeepLink(intent)
     refreshAll()
-    if (store.paired) relay.connect() else onState("not paired")
+    if (store.paired) (application as PhoneApp).ensureService() else onState("not paired")
 
     // opened from the approval notification?
     intent.getStringExtra("approval")?.let { id ->
@@ -140,7 +150,7 @@ class MainActivity : Activity(), Relay.Listener {
     relayIn.setText(r); codeIn.setText(code)
     log("deep link → pairing…")
     relay.pair(r, code) { ok, msg ->
-      runOnUiThread { log(msg); if (ok) { codeIn.setText(""); refreshAll(); relay.connect() } }
+      runOnUiThread { log(msg); if (ok) { codeIn.setText(""); refreshAll(); (application as PhoneApp).ensureService() } }
     }
   }
 

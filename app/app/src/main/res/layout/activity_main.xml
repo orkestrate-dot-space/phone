@@ -180,6 +180,17 @@
         android:text="Unpair" />
       <TextView
         style="@style/RowTitle"
+        android:text="Background" />
+      <TextView
+        style="@style/RowDesc"
+        android:text="Keep the link alive with the screen off. One system prompt." />
+      <Button
+        android:id="@+id/bgBtn"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Allow background" />
+      <TextView
+        style="@style/RowTitle"
         android:text="Log" />
       <TextView
         android:id="@+id/logView"
@@ -194,7 +205,7 @@
       <TextView
         android:id="@+id/updateStatus"
         style="@style/RowDesc"
-        android:text="v0.9.0 · no check yet" />
+        android:text="v0.10.0 · no check yet" />
       <Button
         android:id="@+id/updateBtn"
         android:layout_width="wrap_content"
