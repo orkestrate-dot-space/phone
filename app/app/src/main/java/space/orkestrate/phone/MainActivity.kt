@@ -134,11 +134,30 @@ class MainActivity : Activity(), Relay.Listener {
         android.provider.Settings.Global.getInt(
           contentResolver, android.provider.Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1
       } catch (_: Exception) { true }
+      if (!devOn) {
+        try {
+          startActivity(Intent(android.provider.Settings.ACTION_DEVICE_INFO_SETTINGS))
+        } catch (e: Exception) { shellNote("open Settings manually") }
+        return@setOnClickListener
+      }
+      // deepest first: QS-tile prefs intent lands ON the wireless debugging page
       try {
-        startActivity(Intent(if (devOn)
-          android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS
-        else
-          android.provider.Settings.ACTION_DEVICE_INFO_SETTINGS))
+        val tile = Intent("android.service.quicksettings.ACTION_QS_TILE_PREFERENCES")
+        tile.putExtra("android.intent.extra.COMPONENT_NAME", android.content.ComponentName(
+          "com.android.settings",
+          "com.android.settings.development.qstile.DevelopmentTiles\$WirelessDebugging"))
+        startActivity(tile)
+        return@setOnClickListener
+      } catch (_: Exception) {}
+      // next: dev options scrolled straight to the wireless row (works on One UI)
+      try {
+        val i = Intent(android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
+        i.putExtra(":settings:fragment_args_key", "toggle_adb_wireless")
+        startActivity(i)
+        return@setOnClickListener
+      } catch (_: Exception) {}
+      try {
+        startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
       } catch (e: Exception) { shellNote("open Settings manually") }
     }
     findViewById<Button>(R.id.relaySave).setOnClickListener {
