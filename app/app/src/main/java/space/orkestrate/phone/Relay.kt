@@ -113,10 +113,17 @@ class Relay(private val ctx: Context, private val store: Store) {
     val gone = CountDownLatch(1)
     val socket = http.newWebSocket(req, object : WebSocketListener() {
       override fun onOpen(w: WebSocket, r: Response) {
+        val pm = ctx.packageManager
+        val pkg = ctx.packageName
+        val vcode = pm.getPackageInfo(pkg, 0).let {
+          if (android.os.Build.VERSION.SDK_INT >= 28) it.longVersionCode.toInt()
+          else @Suppress("DEPRECATION") it.versionCode
+        }
         val hello = JSONObject()
           .put("t", "hello")
           .put("deviceId", store.deviceId)
           .put("name", store.name)
+          .put("appVersion", vcode)
           .put("caps", org.json.JSONArray().put("battery.get").put("photo.capture"))
         w.send(hello.toString())
       }

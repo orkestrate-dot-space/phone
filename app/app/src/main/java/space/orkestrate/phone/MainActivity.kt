@@ -356,7 +356,8 @@ class MainActivity : Activity(), Relay.Listener {
           if (android.os.Build.VERSION.SDK_INT >= 28) it.longVersionCode.toInt() else @Suppress("DEPRECATION") it.versionCode
         }
         if (latest <= mine) { updateNote("up to date (${v.optString("versionName")})"); return false }
-        updateNote("downloading ${v.optString("versionName")}…")
+        val notes = v.optString("notes", "")
+        updateNote("downloading ${v.optString("versionName")}${if (notes.isNotBlank()) " — $notes" else ""}…")
         downloadAndInstall(client, base, token)
         return true
     }

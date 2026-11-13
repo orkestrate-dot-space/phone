@@ -24,7 +24,7 @@ const makeCode = () => {
 const log = (...a: unknown[]) => console.error("[phone]", ...a);
 
 // ---- stores ----
-type Device = { id: string; name: string; token: string; lastSeen: number };
+type Device = { id: string; name: string; token: string; lastSeen: number; appVersion?: number };
 type Code = { code: string; expires: number };
 const devices = new Map<string, Device>();
 const byToken = new Map<string, Device>();
@@ -92,7 +92,8 @@ const server = Bun.serve({
     const u = new URL(req.url);
     if (u.pathname === "/health") {
       return Response.json({ ok: true, devices: devices.size,
-        online: [...sockets.keys()] });
+        online: [...sockets.keys()],
+        versions: Object.fromEntries([...devices.values()].map(d => [d.id, d.appVersion ?? null])) });
     }
     // NOTE: no HTTP mint endpoint. Codes are minted only via the MCP
     // phone.pair tool (loopback stdin, never the network): through a tunnel
@@ -156,7 +157,9 @@ const server = Bun.serve({
         const dev = devices.get(msg.deviceId);
         const authedId = ws.data?.pendingAuth;
         if (!dev || dev.id !== authedId || msg.deviceId !== authedId) { ws.close(4401, "bad hello"); return; }
-        if (msg.name) { dev.name = String(msg.name).slice(0, 64); await save(); }
+        if (msg.name) { dev.name = String(msg.name).slice(0, 64); }
+        if (typeof msg.appVersion === "number") dev.appVersion = msg.appVersion;
+        await save();
         dev.lastSeen = Date.now();
         sockets.set(dev.id, ws);
         ws.data.authed = true; ws.data.deviceId = dev.id;
@@ -205,9 +208,11 @@ const TOOLS = [
 
 async function callTool(name: string) {
   if (name === "phone.status") {
-    return { paired: devices.size > 0,
+    return {
+      paired: devices.size > 0,
       devices: [...devices.values()].map(d => ({ id: d.id, name: d.name,
-        online: online(d.id), lastSeen: d.lastSeen })) };
+        appVersion: d.appVersion ?? null, online: online(d.id), lastSeen: d.lastSeen })),
+    };
   }
   if (name === "phone.pair") {
     if ([...codes.values()].filter(c => c.expires > Date.now()).length >= 5)
