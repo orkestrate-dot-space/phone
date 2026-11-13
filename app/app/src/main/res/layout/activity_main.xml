@@ -228,64 +228,7 @@
         android:id="@+id/shellSettings"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="1 · Open wireless settings" />
-      <LinearLayout
-        android:id="@+id/shellConnRow"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal">
-        <EditText
-          android:id="@+id/shellPort"
-          android:layout_width="0dp"
-          android:layout_height="wrap_content"
-          android:layout_weight="1"
-          android:hint="connect port"
-          android:textColor="#E6E9EF"
-          android:textColorHint="#6B7280"
-          android:singleLine="true"
-          android:inputType="number" />
-        <Button
-          android:id="@+id/shellScan"
-          android:layout_width="wrap_content"
-          android:layout_height="wrap_content"
-          android:text="Scan" />
-        <Button
-          android:id="@+id/shellConnect"
-          android:layout_width="wrap_content"
-          android:layout_height="wrap_content"
-          android:text="Connect" />
-      </LinearLayout>
-      <LinearLayout
-        android:id="@+id/shellPairRow"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal">
-        <EditText
-          android:id="@+id/shellPairPort"
-          android:layout_width="0dp"
-          android:layout_height="wrap_content"
-          android:layout_weight="1"
-          android:hint="pair port"
-          android:textColor="#E6E9EF"
-          android:textColorHint="#6B7280"
-          android:singleLine="true"
-          android:inputType="number" />
-        <EditText
-          android:id="@+id/shellCode"
-          android:layout_width="0dp"
-          android:layout_height="wrap_content"
-          android:layout_weight="1"
-          android:hint="pair code"
-          android:textColor="#E6E9EF"
-          android:textColorHint="#6B7280"
-          android:singleLine="true"
-          android:inputType="number" />
-        <Button
-          android:id="@+id/shellPair"
-          android:layout_width="wrap_content"
-          android:layout_height="wrap_content"
-          android:text="Pair" />
-      </LinearLayout>
+        android:text="Set up shell" />
       <TextView
         style="@style/RowTitle"
         android:text="Log" />
@@ -302,7 +245,7 @@
       <TextView
         android:id="@+id/updateStatus"
         style="@style/RowDesc"
-        android:text="v0.17.4 · no check yet" />
+        android:text="v0.17.5 · no check yet" />
       <Button
         android:id="@+id/updateBtn"
         android:layout_width="wrap_content"

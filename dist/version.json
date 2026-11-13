@@ -1,1 +1,1 @@
-{"versionCode":21,"versionName":"0.17.4","notes":"backoff that survives dead routes, LAN-IP pairing, no-spam prompt"}
+{"versionCode":22,"versionName":"0.17.5","notes":"no transcribing: dialog-driven pairing, notification only while dialog open"}

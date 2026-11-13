@@ -141,62 +141,6 @@ class MainActivity : Activity(), Relay.Listener {
           android.provider.Settings.ACTION_DEVICE_INFO_SETTINGS))
       } catch (e: Exception) { shellNote("open Settings manually") }
     }
-    findViewById<Button>(R.id.shellScan).setOnClickListener {
-      shellNote("scanning…")
-      adb.discover { connect, pair ->
-        runOnUiThread {
-          if (connect.isNotEmpty())
-            findViewById<EditText>(R.id.shellPort).setText(connect.first().toString())
-          if (pair.isNotEmpty())
-            findViewById<EditText>(R.id.shellPairPort).setText(pair.first().toString())
-          shellNote(if (connect.isEmpty() && pair.isEmpty())
-            "nothing found — is wireless debugging on?"
-          else "found connect=${connect.joinToString(",")} pair=${pair.joinToString(",")}")
-        }
-      }
-    }
-    findViewById<Button>(R.id.shellConnect).setOnClickListener {
-      val port = findViewById<EditText>(R.id.shellPort).text.toString().toIntOrNull()
-      if (port == null) { shellNote("enter the connect port (or Scan)"); return@setOnClickListener }
-      shellNote("connecting…")
-      Thread {
-        val ok = adb.connect(port)
-        if (ok) {
-          store.adbSerial = adb.serial; store.adbPaired = true
-          selfGrantShell()
-        }
-        runOnUiThread { refreshShellStatus(); if (ok) log("shell connected: ${adb.serial}") }
-      }.start()
-    }
-    findViewById<Button>(R.id.shellPair).setOnClickListener {
-      val pairPort = findViewById<EditText>(R.id.shellPairPort).text.toString().toIntOrNull()
-      val code = findViewById<EditText>(R.id.shellCode).text.toString().trim()
-      if (pairPort == null || code.isBlank()) { shellNote("pair port + code from Settings"); return@setOnClickListener }
-      shellNote("pairing…")
-      Thread {
-        val host = adb.lanIp() ?: "127.0.0.1"
-        val ok = adb.pair(host, pairPort, code)
-        runOnUiThread {
-          if (!ok) { shellNote("pair failed — check code/port"); return@runOnUiThread }
-          store.adbPaired = true
-          shellNote("paired — scanning for connect port…")
-          adb.discover { connect, _ ->
-            runOnUiThread {
-              val port = connect.firstOrNull()
-              if (port == null) { shellNote("paired — enter connect port manually"); refreshShellStatus(); return@runOnUiThread }
-              findViewById<EditText>(R.id.shellPort).setText(port.toString())
-              Thread {
-                if (adb.connect(port)) {
-                  store.adbSerial = adb.serial
-                  selfGrantShell()
-                }
-                runOnUiThread { refreshShellStatus() }
-              }.start()
-            }
-          }
-        }
-      }.start()
-    }
     findViewById<Button>(R.id.relaySave).setOnClickListener {
       val r = findViewById<EditText>(R.id.relayEdit).text.toString().trim()
       if (r.isBlank()) { log("relay address empty"); return@setOnClickListener }
@@ -291,32 +235,27 @@ class MainActivity : Activity(), Relay.Listener {
     } catch (_: Exception) { true }
     val wirelessOn = adb.isWirelessOn()
     val settingsBtn = findViewById<Button>(R.id.shellSettings)
-    val connRow = findViewById<LinearLayout>(R.id.shellConnRow)
-    val pairRow = findViewById<LinearLayout>(R.id.shellPairRow)
     when {
       adb.serial != null -> {
-        settingsBtn.visibility = View.GONE; connRow.visibility = View.GONE; pairRow.visibility = View.GONE
+        settingsBtn.visibility = View.GONE
+        ShellPairing.clear(this)
         findViewById<TextView>(R.id.shellStatus).text = "connected — ${adb.serial} (shell-UID)"
       }
       !devOn -> {
-        settingsBtn.visibility = View.VISIBLE; connRow.visibility = View.GONE; pairRow.visibility = View.GONE
+        settingsBtn.visibility = View.VISIBLE
         settingsBtn.text = "0 · Enable developer options"
         findViewById<TextView>(R.id.shellStatus).text =
           "tap below → About phone → tap Build number 7×, then come back"
       }
-      !wirelessOn -> {
-        settingsBtn.visibility = View.VISIBLE; connRow.visibility = View.GONE; pairRow.visibility = View.GONE
-        settingsBtn.text = "1 · Open wireless settings"
-        findViewById<TextView>(R.id.shellStatus).text = "flip the wireless debugging toggle on"
-      }
-      !store.adbPaired -> {
-        settingsBtn.visibility = View.GONE; connRow.visibility = View.GONE; pairRow.visibility = View.VISIBLE
+      !wirelessOn || !store.adbPaired -> {
+        settingsBtn.visibility = View.VISIBLE
+        settingsBtn.text = "Set up shell"
         findViewById<TextView>(R.id.shellStatus).text =
-          "in Settings tap “Pair device with pairing code”, type the 6 digits below"
+          "opens wireless settings — tap “Pair device with pairing code”, then reply the code in the notification"
       }
       else -> {
-        settingsBtn.visibility = View.GONE; connRow.visibility = View.VISIBLE; pairRow.visibility = View.GONE
-        findViewById<TextView>(R.id.shellStatus).text = "tap Connect (or wait — it retries on its own)"
+        settingsBtn.visibility = View.GONE
+        findViewById<TextView>(R.id.shellStatus).text = "paired — connecting…"
       }
     }
   }
@@ -333,29 +272,41 @@ class MainActivity : Activity(), Relay.Listener {
     } catch (e: Exception) { Log.d("phone", "self-grant fail: $e") }
   }
 
+  private var lastShellNote = ""
+
+  private fun shellNoteState(s: String) {
+    if (s == lastShellNote) return
+    lastShellNote = s
+    shellNote(s)
+  }
+
   override fun onResume() {
     super.onResume()
     relay.listener = this
     refreshAll()
-    // continuous port watch while the shell isn't up: dialogs fill fields live
+    // Watch for the pair dialog: notification fires exactly while it is open.
     if (adb.serial == null) {
-      if (adb.isWirelessOn()) ShellPairing.prompt(this)
-      adb.watchPorts { connect, pair ->
+      adb.watchPorts { _, pair ->
+        val haveDialog = pair.isNotEmpty() && !store.adbPaired
+        if (haveDialog) store.adbPairPort = pair.first()
         runOnUiThread {
-          if (connect.isNotEmpty() && findViewById<EditText>(R.id.shellPort).text.isBlank())
-            findViewById<EditText>(R.id.shellPort).setText(connect.first().toString())
-          if (pair.isNotEmpty()) {
-            store.adbPairPort = pair.first()
-            if (findViewById<EditText>(R.id.shellPairPort).text.isBlank())
-              findViewById<EditText>(R.id.shellPairPort).setText(pair.first().toString())
+          if (haveDialog) {
+            ShellPairing.prompt(this)
+            shellNoteState("pair dialog open — reply the 6-digit code in the notification")
+          } else {
+            ShellPairing.clear(this)
+            if (!store.adbPaired) shellNoteState(refreshShellHint())
           }
-          if (!store.adbPaired && adb.isWirelessOn())
-            shellNote("pair dialog open? type its 6-digit code below (or in the notification)")
         }
       }
     } else {
       ShellPairing.clear(this)
     }
+  }
+
+  private fun refreshShellHint(): String = when {
+    adb.isWirelessOn() -> "open “Pair device with pairing code” in Settings"
+    else -> "enable wireless debugging first"
   }
 
   override fun onPause() {

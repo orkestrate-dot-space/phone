@@ -60,6 +60,7 @@ object ShellPairing {
   }
 
   fun clear(ctx: Context) {
+    prompted = false
     ctx.getSystemService(NotificationManager::class.java).cancel(NOTIF_ID)
   }
 }
