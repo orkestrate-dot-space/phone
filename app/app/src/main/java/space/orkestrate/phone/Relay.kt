@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
+import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -38,13 +39,17 @@ class Relay(private val ctx: Context, private val store: Store) {
     Thread {
       try {
         val base = relayHttp.trim().trimEnd('/')
+        val url = "$base/pair/${code.trim().uppercase()}"
+        Log.d("phone", "pair POST $url")
         val req = Request.Builder()
-          .url("$base/pair/${code.trim().uppercase()}")
+          .url(url)
           .post(okhttp3.RequestBody.create(null, "{\"name\":${JSONObject.quote(store.name)}}".toByteArray()))
           .header("Content-Type", "application/json")
           .build()
+        Log.d("phone", "pair exec…")
         http.newCall(req).execute().use { res ->
           val body = res.body?.string() ?: ""
+          Log.d("phone", "pair -> ${res.code} $body")
           if (!res.isSuccessful) { cb(false, "pair ${res.code}: $body"); return@Thread }
           val j = JSONObject(body)
           store.relayHttp = base
@@ -52,7 +57,7 @@ class Relay(private val ctx: Context, private val store: Store) {
           store.token = j.getString("token")
           cb(true, "paired as ${store.deviceId}")
         }
-      } catch (e: Exception) { cb(false, "pair failed: ${e.message}") }
+      } catch (e: Exception) { Log.d("phone", "pair fail: $e"); cb(false, "pair failed: ${e.message}") }
     }.start()
   }
 
@@ -110,8 +115,12 @@ class Relay(private val ctx: Context, private val store: Store) {
       }
       override fun onClosed(w: WebSocket, code: Int, reason: String) { gone.countDown() }
       override fun onFailure(w: WebSocket, t: Throwable, r: Response?) {
+        Log.d("phone", "ws fail: $t")
         listener?.onLog("ws: ${t.message}")
         gone.countDown()
+      }
+      override fun onClosing(w: WebSocket, code: Int, reason: String) {
+        Log.d("phone", "ws closing $code $reason")
       }
     })
     ws = socket

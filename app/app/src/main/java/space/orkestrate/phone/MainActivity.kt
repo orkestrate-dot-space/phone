@@ -86,6 +86,7 @@ class MainActivity : Activity(), Relay.Listener {
 
   private fun handleDeepLink(i: Intent?) {
     val d = i?.data ?: return
+    android.util.Log.d("phone", "deep link: $d")
     if (d.scheme != "phone" || d.host != "pair") return
     val code = d.getQueryParameter("code") ?: return
     val r = d.getQueryParameter("relay") ?: return
