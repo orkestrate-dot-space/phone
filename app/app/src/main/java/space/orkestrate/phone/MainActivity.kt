@@ -323,12 +323,18 @@ class MainActivity : Activity(), Relay.Listener {
         }
       }
       updateNote("downloaded ${(tmp.length() / 1024)} KB, installing…")
-      registerReceiver(object : android.content.BroadcastReceiver() {
+      val statusFilter = IntentFilter("space.orkestrate.phone.UPDATE_STATUS")
+      val statusReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(c: android.content.Context?, i: Intent?) {
           val st = i?.getIntExtra(android.content.pm.PackageInstaller.EXTRA_STATUS, -999)
           updateNote("install status=$st ${i?.getStringExtra(android.content.pm.PackageInstaller.EXTRA_STATUS_MESSAGE) ?: ""}")
         }
-      }, IntentFilter("space.orkestrate.phone.UPDATE_STATUS"))
+      }
+      if (android.os.Build.VERSION.SDK_INT >= 33) {
+        registerReceiver(statusReceiver, statusFilter, android.content.Context.RECEIVER_NOT_EXPORTED)
+      } else {
+        @Suppress("DEPRECATION") registerReceiver(statusReceiver, statusFilter)
+      }
       val pi = packageManager.packageInstaller
       val params = android.content.pm.PackageInstaller.SessionParams(
         android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL)
