@@ -230,6 +230,7 @@
         android:layout_height="wrap_content"
         android:text="1 · Open wireless settings" />
       <LinearLayout
+        android:id="@+id/shellConnRow"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal">
@@ -255,6 +256,7 @@
           android:text="Connect" />
       </LinearLayout>
       <LinearLayout
+        android:id="@+id/shellPairRow"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal">
@@ -300,7 +302,7 @@
       <TextView
         android:id="@+id/updateStatus"
         style="@style/RowDesc"
-        android:text="v0.17.0 · no check yet" />
+        android:text="v0.17.1 · no check yet" />
       <Button
         android:id="@+id/updateBtn"
         android:layout_width="wrap_content"

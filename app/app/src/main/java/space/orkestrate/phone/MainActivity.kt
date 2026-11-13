@@ -129,9 +129,16 @@ class MainActivity : Activity(), Relay.Listener {
       log("auto-approve ${if (store.autoApprove) "ON" else "OFF"}")
     }
     findViewById<Button>(R.id.shellSettings).setOnClickListener {
+      val devOn = try {
+        android.provider.Settings.Global.getInt(
+          contentResolver, android.provider.Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1
+      } catch (_: Exception) { true }
       try {
-        startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
-      } catch (e: Exception) { shellNote("open Developer options manually") }
+        startActivity(Intent(if (devOn)
+          android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS
+        else
+          android.provider.Settings.ACTION_DEVICE_INFO_SETTINGS))
+      } catch (e: Exception) { shellNote("open Settings manually") }
     }
     findViewById<Button>(R.id.shellScan).setOnClickListener {
       shellNote("scanning…")
@@ -276,10 +283,39 @@ class MainActivity : Activity(), Relay.Listener {
   }
 
   private fun refreshShellStatus() {
-    findViewById<TextView>(R.id.shellStatus).text = when {
-      adb.serial != null -> "connected — ${adb.serial} (shell-UID)"
-      store.adbPaired -> "paired — tap Connect (enable wireless debugging first)"
-      else -> "not paired — enable wireless debugging, then Pair"
+    val devOn = try {
+      android.provider.Settings.Global.getInt(
+        contentResolver, android.provider.Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1
+    } catch (_: Exception) { true }
+    val wirelessOn = adb.isWirelessOn()
+    val settingsBtn = findViewById<Button>(R.id.shellSettings)
+    val connRow = findViewById<LinearLayout>(R.id.shellConnRow)
+    val pairRow = findViewById<LinearLayout>(R.id.shellPairRow)
+    when {
+      adb.serial != null -> {
+        settingsBtn.visibility = View.GONE; connRow.visibility = View.GONE; pairRow.visibility = View.GONE
+        findViewById<TextView>(R.id.shellStatus).text = "connected — ${adb.serial} (shell-UID)"
+      }
+      !devOn -> {
+        settingsBtn.visibility = View.VISIBLE; connRow.visibility = View.GONE; pairRow.visibility = View.GONE
+        settingsBtn.text = "0 · Enable developer options"
+        findViewById<TextView>(R.id.shellStatus).text =
+          "tap below → About phone → tap Build number 7×, then come back"
+      }
+      !wirelessOn -> {
+        settingsBtn.visibility = View.VISIBLE; connRow.visibility = View.GONE; pairRow.visibility = View.GONE
+        settingsBtn.text = "1 · Open wireless settings"
+        findViewById<TextView>(R.id.shellStatus).text = "flip the wireless debugging toggle on"
+      }
+      !store.adbPaired -> {
+        settingsBtn.visibility = View.GONE; connRow.visibility = View.GONE; pairRow.visibility = View.VISIBLE
+        findViewById<TextView>(R.id.shellStatus).text =
+          "in Settings tap “Pair device with pairing code”, type the 6 digits below"
+      }
+      else -> {
+        settingsBtn.visibility = View.GONE; connRow.visibility = View.VISIBLE; pairRow.visibility = View.GONE
+        findViewById<TextView>(R.id.shellStatus).text = "tap Connect (or wait — it retries on its own)"
+      }
     }
   }
 
