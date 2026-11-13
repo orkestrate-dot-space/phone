@@ -99,14 +99,19 @@ class ShellPairReceiver : BroadcastReceiver() {
           return@Thread
         }
         store.adbPaired = true
-        val latch2 = java.util.concurrent.CountDownLatch(1)
-        var connectPort: Int? = null
-        adb.discover { connect, _ ->
-          connectPort = connect.firstOrNull()
-          latch2.countDown()
+        // cached connect port first (service watch keeps it fresh), else one scan
+        var cp: Int? = store.adbConnectPort.takeIf { it > 0 }
+        if (cp == null) {
+          val latch2 = java.util.concurrent.CountDownLatch(1)
+          var connectPort: Int? = null
+          adb.discover { connect, _ ->
+            connectPort = connect.firstOrNull()
+            connectPort?.let { store.adbConnectPort = it }
+            latch2.countDown()
+          }
+          latch2.await(15, java.util.concurrent.TimeUnit.SECONDS)
+          cp = connectPort
         }
-        latch2.await(15, java.util.concurrent.TimeUnit.SECONDS)
-        val cp = connectPort
         if (cp != null && adb.connect(cp)) {
           store.adbSerial = adb.serial
           try {

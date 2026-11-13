@@ -27,10 +27,14 @@ class Store(ctx: Context) {
     get() = p.getInt("adbPairPort", 0)
     set(v) = p.edit().putInt("adbPairPort", v).apply()
 
+  var adbConnectPort: Int
+    get() = p.getInt("adbConnectPort", 0)
+    set(v) = p.edit().putInt("adbConnectPort", v).apply()
+
   val paired: Boolean get() = deviceId != null && token != null && relayHttp != null
 
   fun clear() = p.edit().remove("relayHttp").remove("deviceId").remove("token")
-    .remove("adbSerial").remove("adbPaired").apply()
+    .remove("adbSerial").remove("adbPaired").remove("adbPairPort").remove("adbConnectPort").apply()
 
   private fun put(k: String, v: String?) =
     p.edit().apply { if (v == null) remove(k) else putString(k, v) }.apply()

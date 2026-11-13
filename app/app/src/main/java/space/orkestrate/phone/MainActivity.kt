@@ -309,18 +309,15 @@ class MainActivity : Activity(), Relay.Listener {
     super.onResume()
     relay.listener = this
     refreshAll()
-    // Watch for the pair dialog: notification fires exactly while it is open.
+    // Live pair-dialog status; the service owns posting the notification.
     if (adb.serial == null) {
       adb.watchPorts { _, pair ->
-        val haveDialog = pair.isNotEmpty() && !store.adbPaired
-        if (haveDialog) store.adbPairPort = pair.first()
         runOnUiThread {
-          if (haveDialog) {
-            ShellPairing.prompt(this)
+          if (pair.isNotEmpty() && !store.adbPaired) {
+            store.adbPairPort = pair.first()
             shellNoteState("pair dialog open — reply the 6-digit code in the notification")
-          } else {
-            ShellPairing.clear(this)
-            if (!store.adbPaired) shellNoteState(refreshShellHint())
+          } else if (!store.adbPaired) {
+            shellNoteState(refreshShellHint())
           }
         }
       }

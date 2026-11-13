@@ -18,14 +18,28 @@ class RelayService : Service() {
 
   private lateinit var app: PhoneApp
   private lateinit var nm: NotificationManager
+  private lateinit var adb: AdbShell
 
   override fun onBind(i: Intent?): IBinder? = null
 
   override fun onCreate() {
     super.onCreate()
     app = application as PhoneApp
+    adb = AdbShell(this)
     nm = getSystemService(NotificationManager::class.java)
     nm.createNotificationChannel(NotificationChannel("link", "relay link", NotificationManager.IMPORTANCE_MIN))
+    // Always-on mDNS watch: caches pair/connect ports so a pairing reply
+    // fires instantly (codes expire fast), and posts the reply notification
+    // exactly while the pair dialog is open.
+    adb.watchPorts { connect, pair ->
+      if (pair.isNotEmpty()) app.store.adbPairPort = pair.first()
+      if (connect.isNotEmpty()) app.store.adbConnectPort = connect.first()
+      if (pair.isNotEmpty() && app.store.adbSerial == null) {
+        ShellPairing.prompt(this)
+      } else {
+        ShellPairing.clear(this)
+      }
+    }
   }
 
   override fun onStartCommand(i: Intent?, flags: Int, startId: Int): Int {
@@ -41,6 +55,7 @@ class RelayService : Service() {
   }
 
   override fun onDestroy() {
+    adb.unwatch()
     app.relay.disconnect()
     super.onDestroy()
   }
