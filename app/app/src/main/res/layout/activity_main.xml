@@ -195,6 +195,27 @@
         android:text="Allow background" />
       <TextView
         style="@style/RowTitle"
+        android:text="Auto-approve" />
+      <TextView
+        style="@style/RowDesc"
+        android:text="Exact-match only, read-only recon. Nothing else ever auto-runs." />
+      <TextView
+        android:id="@+id/autoList"
+        style="@style/RowDesc"
+        android:text="date · uname -a · uptime · getprop ro.build.version.release · getprop ro.product.model · getprop ro.build.version.sdk · cat /proc/version"
+        android:typeface="monospace"
+        android:textSize="12sp" />
+      <TextView
+        android:id="@+id/autoStatus"
+        style="@style/RowDesc"
+        android:text="checking…" />
+      <Button
+        android:id="@+id/autoBtn"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Turn on" />
+      <TextView
+        style="@style/RowTitle"
         android:text="Log" />
       <TextView
         android:id="@+id/logView"
@@ -209,7 +230,7 @@
       <TextView
         android:id="@+id/updateStatus"
         style="@style/RowDesc"
-        android:text="v0.14.0 · no check yet" />
+        android:text="v0.15.0 · no check yet" />
       <Button
         android:id="@+id/updateBtn"
         android:layout_width="wrap_content"

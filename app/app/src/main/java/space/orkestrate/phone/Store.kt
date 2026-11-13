@@ -14,6 +14,10 @@ class Store(ctx: Context) {
   var name: String get() = p.getString("name", android.os.Build.MODEL) ?: android.os.Build.MODEL
   set(v) = put("name", v)
 
+  var autoApprove: Boolean
+    get() = p.getBoolean("autoApprove", false)
+    set(v) = p.edit().putBoolean("autoApprove", v).apply()
+
   val paired: Boolean get() = deviceId != null && token != null && relayHttp != null
 
   fun clear() = p.edit().remove("relayHttp").remove("deviceId").remove("token").apply()

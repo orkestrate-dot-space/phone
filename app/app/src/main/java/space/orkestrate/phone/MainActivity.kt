@@ -118,6 +118,11 @@ class MainActivity : Activity(), Relay.Listener {
         } catch (e2: Exception) { log("settings failed: ${e2.message}") }
       }
     }
+    findViewById<Button>(R.id.autoBtn).setOnClickListener {
+      store.autoApprove = !store.autoApprove
+      refreshAutoStatus()
+      log("auto-approve ${if (store.autoApprove) "ON" else "OFF"}")
+    }
     findViewById<Button>(R.id.relaySave).setOnClickListener {
       val r = findViewById<EditText>(R.id.relayEdit).text.toString().trim()
       if (r.isBlank()) { log("relay address empty"); return@setOnClickListener }
@@ -168,6 +173,7 @@ class MainActivity : Activity(), Relay.Listener {
     advDevice.text = store.deviceId ?: "—"
     pairingBox.visibility = if (store.paired) View.GONE else View.VISIBLE
     refreshBgStatus()
+    refreshAutoStatus()
     if (!store.paired) { onState("not paired"); lastJob.text = "no jobs yet" }
   }
 
@@ -177,6 +183,14 @@ class MainActivity : Activity(), Relay.Listener {
     findViewById<TextView>(R.id.bgStatus).text =
       if (exempt) "unrestricted ✓ — link survives the screen off"
       else "restricted — tap Allow background"
+  }
+
+  private fun refreshAutoStatus() {
+    val on = store.autoApprove
+    findViewById<TextView>(R.id.autoStatus).text =
+      if (on) "ON — listed commands run without a tap, everything else asks"
+      else "OFF — every command asks"
+    findViewById<Button>(R.id.autoBtn).text = if (on) "Turn off" else "Turn on"
   }
 
   override fun onResume() {
@@ -192,8 +206,15 @@ class MainActivity : Activity(), Relay.Listener {
   // ---- approval surface ----
   override fun onApproval(jobId: String, capability: String) {
     runOnUiThread {
-      notifyApproval(jobId, capability)
-      showApproval(jobId)
+      val argv = relay.jobParams(jobId)?.optJSONArray("argv")
+        ?.let { a -> (0 until a.length()).map { a.getString(it) } }
+      if (capability == "exec.run" && argv != null && store.autoApprove && ExecPolicy.auto(argv)) {
+        log("auto-run (allowlisted): ${argv.joinToString(" ")}")
+        runExec(jobId, argv)
+      } else {
+        notifyApproval(jobId, capability)
+        showApproval(jobId)
+      }
     }
   }
 

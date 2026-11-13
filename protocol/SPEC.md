@@ -64,9 +64,17 @@ What the sandbox actually allows (verified against AOSP sepolicy + behavior docs
 Rules: argv-array form only, never `sh -c` interpolation (Mode B shell scripts
 deferred); absolute path or bare name resolved against `/system/bin` + a small
 allowlist (`ls cat echo date uname getprop df du head`); 30s timeout, kill on
-expiry; stdout/stderr capped 64KB each with `truncated` flags. Always-ask in v1
-(every invocation needs the tap); a read-only auto-allowlist is a later policy
-screen. Play would flag remote-driven exec — sideload-only until that story exists.
+expiry; stdout/stderr capped 64KB each with `truncated` flags. Play would flag
+remote-driven exec — sideload-only until that story exists.
+
+### Auto-approve policy (locked down, user opt-in)
+- Master toggle in-app (default OFF). When ON, **exact-match** argv in
+  `ExecPolicy.AUTO` runs without a tap: `date`, `uname -a`, `uptime`,
+  `getprop ro.build.version.{release,sdk}`, `getprop ro.product.model`,
+  `cat /proc/version`. No prefixes, no globs, no agent-chosen args.
+- Everything else in the executor allowlist raises the card; everything
+  outside it is rejected outright. Every auto-run is logged on-device and
+  visible in the agent transcript (command + result) — audit without taps.
 
 Empirical boundary (SM-M176B, Android 16, Samsung — live runs):
 - `getprop ro.build.version.release` → exit 0, `16`. Execution + stdout path proven.
