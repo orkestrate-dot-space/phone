@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Design tokens sampled from dzianisv/opencode-mobile (MIT):
+     bg #0b0f17, soft #121826, card #161d2e, border #243049,
+     text #e6ebf5, muted #9aa6be, accent #3b82f6 / #2563eb. -->
+<resources>
+  <color name="ph_bg">#0B0F17</color>
+  <color name="ph_bg_soft">#121826</color>
+  <color name="ph_card">#161D2E</color>
+  <color name="ph_border">#243049</color>
+  <color name="ph_text">#E6EBF5</color>
+  <color name="ph_muted">#9AA6BE</color>
+  <color name="ph_accent">#3B82F6</color>
+  <color name="ph_accent_dark">#2563EB</color>
+  <color name="ph_ok">#4ADE80</color>
+  <color name="ph_bad">#F87171</color>
+  <color name="ph_dim">#6B7280</color>
+</resources>

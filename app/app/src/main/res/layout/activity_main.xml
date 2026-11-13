@@ -2,14 +2,14 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
   android:layout_width="match_parent"
   android:layout_height="match_parent"
-  android:background="#0B0E14"
+  android:background="@color/ph_bg"
   android:padding="16dp">
 
   <LinearLayout
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:background="#151A23"
+    android:background="@drawable/card_bg"
     android:padding="20dp">
 
     <!-- header -->
@@ -23,7 +23,7 @@
         android:layout_height="8dp"
         android:layout_marginTop="6dp"
         android:layout_marginEnd="8dp"
-        android:background="#6B7280" />
+        android:background="@color/ph_dim" />
       <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -33,14 +33,14 @@
           android:layout_width="wrap_content"
           android:layout_height="wrap_content"
           android:text="not paired"
-          android:textColor="#E6E9EF"
+          android:textColor="@color/ph_text"
           android:textSize="16sp"
           android:textStyle="bold" />
         <TextView
           android:id="@+id/identity"
           android:layout_width="wrap_content"
           android:layout_height="wrap_content"
-          android:textColor="#9AA3B2"
+          android:textColor="@color/ph_muted"
           android:textSize="13sp" />
       </LinearLayout>
     </LinearLayout>
@@ -61,60 +61,136 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
-        android:textColor="#E6E9EF"
+        android:textColor="@color/ph_text"
         android:singleLine="true" />
       <Button
         android:id="@+id/saveName"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Save" />
+        android:text="Save"
+        android:background="@drawable/btn_primary"
+        android:textColor="#FFFFFF"/>
     </LinearLayout>
 
-    <!-- pairing -->
+    <!-- setup: the entry point. visible until the relay is paired -->
     <LinearLayout
-      android:id="@+id/pairingBox"
+      android:id="@+id/setupBox"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:orientation="vertical"
+      android:visibility="gone">
+      <TextView
+        style="@style/Section"
+        android:text="setup" />
+      <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Connect your agent"
+        android:textColor="@color/ph_text"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+      <TextView
+        android:id="@+id/setupStatus"
+        style="@style/RowDesc"
+        android:text="This screen checks each step as it happens." />
+      <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+        <Button
+          android:id="@+id/tabAsk"
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:text="Ask your agent" />
+        <Button
+          android:id="@+id/tabDiy"
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:text="Do it yourself" />
+      </LinearLayout>
+      <LinearLayout
+        android:id="@+id/askBox"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+        <TextView
+          style="@style/RowTitle"
+          android:text="1 · Paste this into your agent" />
+        <TextView
+          android:id="@+id/agentPrompt"
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:text="Pair my phone companion app: 1) call phone.doctor to find my relay's public URL, 2) call phone.pair to mint a code, 3) reply with exactly one tappable link and no other text: phone://pair?code=CODE&amp;relay=URL"
+          android:textColor="@color/ph_text"
+          android:textSize="13sp"
+          android:background="@color/ph_bg"
+          android:padding="12dp" />
+        <Button
+          android:id="@+id/copyPrompt"
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:background="@drawable/btn_primary"
+          android:textColor="#FFFFFF"
+          android:text="Copy" />
+        <TextView
+          style="@style/RowDesc"
+          android:text="2 · Tap the link your agent replies with. 3 · Ask it: what's my battery?" />
+      </LinearLayout>
+      <LinearLayout
+        android:id="@+id/diyBox"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:visibility="gone">
+        <TextView
+          style="@style/RowTitle"
+          android:text="1 · Relay + code" />
+        <TextView
+          style="@style/RowDesc"
+          android:text="The relay address, plus the code the desktop minted (MCP phone.pair)." />
+        <EditText
+          android:id="@+id/relayIn"
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:hint="https://….opentunnel.xyz or http://laptop-ip:19877"
+          android:textColor="@color/ph_text"
+          android:textColorHint="@color/ph_dim"
+          android:singleLine="true"
+          android:inputType="textUri" />
+        <LinearLayout
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:orientation="horizontal">
+          <EditText
+            android:id="@+id/codeIn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:hint="XXXXXXXX"
+            android:textColor="@color/ph_text"
+            android:textColorHint="@color/ph_dim"
+            android:singleLine="true"
+            android:inputType="textCapCharacters" />
+          <Button
+            android:id="@+id/pairBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/btn_primary"
+            android:textColor="#FFFFFF"
+            android:text="Pair" />
+        </LinearLayout>
+        <TextView
+          style="@style/RowDesc"
+          android:text="2 · Ask your agent: what's my battery? The answer proves the loop." />
+      </LinearLayout>
+    </LinearLayout>
+
+    <!-- main: everything after the relay is live -->
+    <LinearLayout
+      android:id="@+id/mainBox"
       android:layout_width="match_parent"
       android:layout_height="wrap_content"
       android:orientation="vertical">
-    <TextView
-      style="@style/Section"
-      android:text="pairing" />
-    <TextView
-      style="@style/RowTitle"
-      android:text="Relay + code" />
-    <TextView
-      style="@style/RowDesc"
-      android:text="Paste the relay address + the code the desktop minted (MCP phone.pair)." />
-    <EditText
-      android:id="@+id/relayIn"
-      android:layout_width="match_parent"
-      android:layout_height="wrap_content"
-      android:hint="https://….opentunnel.xyz or http://laptop-ip:19877"
-      android:textColor="#E6E9EF"
-      android:textColorHint="#6B7280"
-      android:singleLine="true"
-      android:inputType="textUri" />
-    <LinearLayout
-      android:layout_width="match_parent"
-      android:layout_height="wrap_content"
-      android:orientation="horizontal">
-      <EditText
-        android:id="@+id/codeIn"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_weight="1"
-        android:hint="XXXXXXXX"
-        android:textColor="#E6E9EF"
-        android:textColorHint="#6B7280"
-        android:singleLine="true"
-        android:inputType="textCapCharacters" />
-      <Button
-        android:id="@+id/pairBtn"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Pair" />
-    </LinearLayout>
-    </LinearLayout>
 
     <!-- agent jobs -->
     <TextView
@@ -155,8 +231,8 @@
           android:layout_width="0dp"
           android:layout_height="wrap_content"
           android:layout_weight="1"
-          android:textColor="#E6E9EF"
-          android:textColorHint="#6B7280"
+          android:textColor="@color/ph_text"
+          android:textColorHint="@color/ph_dim"
           android:hint="https://… or http://laptop-ip:19877"
           android:singleLine="true"
           android:inputType="textUri" />
@@ -164,6 +240,8 @@
           android:id="@+id/relaySave"
           android:layout_width="wrap_content"
           android:layout_height="wrap_content"
+          android:background="@drawable/btn_primary"
+          android:textColor="#FFFFFF"
           android:text="Use" />
       </LinearLayout>
       <TextView
@@ -246,7 +324,7 @@
         android:id="@+id/logView"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textColor="#9AA3B2"
+        android:textColor="@color/ph_muted"
         android:textSize="12sp"
         android:typeface="monospace" />
       <TextView
@@ -259,7 +337,7 @@
       <TextView
         android:id="@+id/updateStatus"
         style="@style/RowDesc"
-        android:text="v0.17.15 · no check yet" />
+        android:text="v0.18.0 · no check yet" />
       <TextView
         android:id="@+id/selfUpdateStatus"
         style="@style/RowDesc"
@@ -280,7 +358,11 @@
         android:id="@+id/updateBtn"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:background="@drawable/btn_primary"
+        android:textColor="#FFFFFF"
         android:text="Check update" />
+    </LinearLayout>
+
     </LinearLayout>
 
   </LinearLayout>

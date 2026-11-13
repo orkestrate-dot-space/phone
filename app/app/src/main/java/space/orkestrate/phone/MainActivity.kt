@@ -45,7 +45,8 @@ class MainActivity : Activity(), Relay.Listener {
   private lateinit var nameIn: EditText
   private lateinit var relayIn: EditText
   private lateinit var codeIn: EditText
-  private lateinit var pairingBox: LinearLayout
+  private lateinit var setupBox: LinearLayout
+  private lateinit var mainBox: LinearLayout
   private lateinit var lastJob: TextView
   private lateinit var advBox: LinearLayout
   private lateinit var advRelay: TextView
@@ -74,7 +75,8 @@ class MainActivity : Activity(), Relay.Listener {
     nameIn = findViewById(R.id.nameIn)
     relayIn = findViewById(R.id.relayIn)
     codeIn = findViewById(R.id.codeIn)
-    pairingBox = findViewById(R.id.pairingBox)
+    setupBox = findViewById(R.id.setupBox)
+    mainBox = findViewById(R.id.mainBox)
     lastJob = findViewById(R.id.lastJob)
     advBox = findViewById(R.id.advBox)
     advRelay = findViewById(R.id.advRelay)
@@ -98,6 +100,20 @@ class MainActivity : Activity(), Relay.Listener {
           if (ok) { codeIn.setText(""); refreshAll(); (application as PhoneApp).ensureService() }
         }
       }
+    }
+    findViewById<Button>(R.id.tabAsk).setOnClickListener {
+      findViewById<LinearLayout>(R.id.askBox).visibility = View.VISIBLE
+      findViewById<LinearLayout>(R.id.diyBox).visibility = View.GONE
+    }
+    findViewById<Button>(R.id.tabDiy).setOnClickListener {
+      findViewById<LinearLayout>(R.id.askBox).visibility = View.GONE
+      findViewById<LinearLayout>(R.id.diyBox).visibility = View.VISIBLE
+    }
+    findViewById<Button>(R.id.copyPrompt).setOnClickListener {
+      val cm = getSystemService(android.content.ClipboardManager::class.java)
+      cm.setPrimaryClip(android.content.ClipData.newPlainText("agent",
+        findViewById<TextView>(R.id.agentPrompt).text))
+      log("prompt copied — paste it into your agent")
     }
     findViewById<TextView>(R.id.advToggle).setOnClickListener {
       advBox.visibility = if (advBox.visibility == View.GONE) View.VISIBLE else View.GONE
@@ -260,7 +276,8 @@ class MainActivity : Activity(), Relay.Listener {
     advRelay.text = store.relayHttp ?: "—"
     findViewById<EditText>(R.id.relayEdit).setText(store.relayHttp ?: "")
     advDevice.text = store.deviceId ?: "—"
-    pairingBox.visibility = if (store.paired) View.GONE else View.VISIBLE
+    setupBox.visibility = if (store.paired) View.GONE else View.VISIBLE
+    mainBox.visibility = if (store.paired) View.VISIBLE else View.GONE
     try {
       val pkg = packageManager.getPackageInfo(packageName, 0)
       val vc = if (android.os.Build.VERSION.SDK_INT >= 28) pkg.longVersionCode else @Suppress("DEPRECATION") pkg.versionCode.toLong()
@@ -756,7 +773,7 @@ class MainActivity : Activity(), Relay.Listener {
   private fun renderHeader() {
     val relayLive = lastRelayState.startsWith("connected")
     val shellLive = adb.serial != null
-    dot.setBackgroundColor(if (relayLive || shellLive) 0xFF34D399.toInt() else 0xFF6B7280.toInt())
+    dot.setBackgroundColor(if (relayLive || shellLive) 0xFF4ADE80.toInt() else 0xFF6B7280.toInt())
     status.text = when {
       relayLive && shellLive -> "connected — relay + shell"
       relayLive -> "connected — relay (shell off)"
