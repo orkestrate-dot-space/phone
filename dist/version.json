@@ -1,1 +1,1 @@
-{"versionCode":26,"versionName":"0.17.9","notes":"extract native adb server at install"}
+{"versionCode":27,"versionName":"0.17.10","notes":"pick up shell session on resume"}

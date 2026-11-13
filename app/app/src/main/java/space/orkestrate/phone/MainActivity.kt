@@ -313,6 +313,8 @@ class MainActivity : Activity(), Relay.Listener {
   override fun onResume() {
     super.onResume()
     relay.listener = this
+    // pick up a shell session paired while we were away (receiver persists it)
+    if (adb.serial == null) store.adbSerial?.let { adb.setSerial(it) }
     refreshAll()
     // Live pair-dialog status; the service owns posting the notification.
     if (adb.serial == null) {
