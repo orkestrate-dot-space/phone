@@ -245,7 +245,16 @@
       <TextView
         android:id="@+id/updateStatus"
         style="@style/RowDesc"
-        android:text="v0.17.11 · no check yet" />
+        android:text="v0.17.12 · no check yet" />
+      <TextView
+        android:id="@+id/selfUpdateStatus"
+        style="@style/RowDesc"
+        android:text="checking…" />
+      <Button
+        android:id="@+id/selfUpdateBtn"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Let agent update" />
       <ProgressBar
         android:id="@+id/updateProgress"
         style="?android:attr/progressBarStyleHorizontal"

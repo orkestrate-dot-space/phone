@@ -110,7 +110,7 @@ class RelayService : Service() {
     override fun onLog(s: String) { app.uiListener?.onLog(s) }
     override fun onApproval(jobId: String, capability: String) {
       notifyApproval(jobId, capability)
-      // headless auto-run: allowlisted recon completes without the app open
+      // headless paths (no dialog possible): auto-allowlisted exec + opted-in self-update
       if (capability == "exec.run") {
         val argv = app.relay.jobParams(jobId)
           ?.optJSONArray("argv")
@@ -120,6 +120,12 @@ class RelayService : Service() {
             override fun note(s: String) { Log.d("phone", s) }
           })
         }
+      } else if (capability == "app.update" && app.store.allowSelfUpdate) {
+        SelfUpdate(this@RelayService, app.relay, app.adb, app.store).run(jobId,
+          object : SelfUpdate.Sink {
+            override fun note(s: String) { Log.d("phone", s) }
+            override fun progress(pct: Int) {}
+          })
       }
       // anything else waits for the on-glass tap (notification tap opens the card)
       app.uiListener?.onApproval(jobId, capability)

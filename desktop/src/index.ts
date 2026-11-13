@@ -204,6 +204,8 @@ const TOOLS = [
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
   { name: "phone.exec", description: "Run a system command on the phone (on-glass approval every time, app-sandbox limits)",
     inputSchema: { type: "object", properties: { argv: { type: "array", items: { type: "string" } }, timeoutSec: { type: "number" } }, required: ["argv"], additionalProperties: false } },
+  { name: "phone.update", description: "Ship the relay-published build to the phone: downloads + silent shell install, zero taps if opted in",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false } },
   { name: "phone.pair", description: "Mint a pairing code (10 min, single use)",
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
   { name: "phone.pair_list", description: "Paired devices (keys never shown)",
@@ -293,6 +295,17 @@ async function callTool(name: string, params?: any) {
       throw new Error("argv must be a non-empty string array");
     const data = await sendJob(dev.id, "exec.run",
       { argv, timeoutSec: Math.min(Math.max(params?.timeoutSec ?? 30, 5), 120) }, 300000);
+    return data as Record<string, unknown>;
+  }
+  if (name === "phone.update") {
+    const dev = [...devices.values()][0];
+    if (!dev) throw new Error("no-device: pair the app and keep it online");
+    let meta: any = null;
+    try { meta = await Bun.file(DIST_DIR + "/version.json").json(); }
+    catch { throw new Error("no build published in dist/"); }
+    const data = await sendJob(dev.id, "app.update",
+      { versionCode: meta.versionCode, versionName: meta.versionName ?? "",
+        notes: meta.notes ?? "" }, 180000);
     return data as Record<string, unknown>;
   }
   throw new Error("unknown tool " + name);

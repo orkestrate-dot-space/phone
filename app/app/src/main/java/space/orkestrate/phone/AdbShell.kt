@@ -172,6 +172,12 @@ class AdbShell(private val ctx: Context) {
     watchListeners.clear()
   }
 
+  /** Silent install via the bundled adb (shell-UID needs no on-device tap). */
+  fun installApk(apkPath: String, timeoutSec: Long = 180): Result {
+    val s = serial ?: return Result(-1, "", "adb not connected", false)
+    return run(listOf("-s", s, "install", "-r", apkPath), timeoutSec = timeoutSec)
+  }
+
   /** One-shot mDNS scan (~10s). Kept for background flows without a lifecycle. */
   fun discover(cb: (connect: List<Int>, pair: List<Int>) -> Unit) {
     try {

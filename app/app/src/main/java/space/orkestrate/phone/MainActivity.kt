@@ -134,6 +134,11 @@ class MainActivity : Activity(), Relay.Listener {
       refreshAutoStatus()
       log("auto-approve ${if (store.autoApprove) "ON" else "OFF"}")
     }
+    findViewById<Button>(R.id.selfUpdateBtn).setOnClickListener {
+      store.allowSelfUpdate = !store.allowSelfUpdate
+      refreshAutoStatus()
+      log("agent self-update ${if (store.allowSelfUpdate) "ON" else "OFF"}")
+    }
     findViewById<Button>(R.id.shellSettings).setOnClickListener {
       val devOn = try {
         android.provider.Settings.Global.getInt(
@@ -194,7 +199,7 @@ class MainActivity : Activity(), Relay.Listener {
 
     // opened from the approval notification?
     intent.getStringExtra("approval")?.let { id ->
-      if (relay.pendingApproval(id)) showApproval(id)
+      if (relay.pendingApproval(id)) showApproval(id, capabilityOf(id))
       else log("approval $id already settled")
     }
   }
@@ -203,7 +208,17 @@ class MainActivity : Activity(), Relay.Listener {
     super.onNewIntent(i)
     handleDeepLink(i)
     i.getStringExtra("approval")?.let { id ->
-      if (relay.pendingApproval(id)) showApproval(id)
+      if (relay.pendingApproval(id)) showApproval(id, capabilityOf(id))
+    }
+  }
+
+  private fun capabilityOf(jobId: String): String {
+    val p = relay.jobParams(jobId)
+    return when {
+      p == null -> "photo.capture"
+      p.has("argv") -> "exec.run"
+      p.has("versionCode") -> "app.update"
+      else -> "photo.capture"
     }
   }
 
@@ -245,6 +260,11 @@ class MainActivity : Activity(), Relay.Listener {
       if (on) "ON — listed commands run without a tap, everything else asks"
       else "OFF — every command asks"
     findViewById<Button>(R.id.autoBtn).text = if (on) "Turn off" else "Turn on"
+    val su = store.allowSelfUpdate
+    findViewById<TextView>(R.id.selfUpdateStatus).text =
+      if (su) "ON — the agent ships updates itself, no taps"
+      else "OFF — updates need your tap (check button or approval card)"
+    findViewById<Button>(R.id.selfUpdateBtn).text = if (su) "Turn off" else "Let agent update"
   }
 
   private fun shellNote(s: String) {
@@ -353,18 +373,51 @@ class MainActivity : Activity(), Relay.Listener {
   // ---- approval surface (service posts the notification; we show the card) ----
   override fun onApproval(jobId: String, capability: String) {
     runOnUiThread {
-      // service may have settled it headlessly (auto-approve) — don't double-run
+      // service may have settled it headlessly (auto-approve / self-update) — don't double-run
       if (!relay.pendingApproval(jobId)) {
         log("job $jobId settled in background")
         return@runOnUiThread
       }
-      showApproval(jobId)
+      showApproval(jobId, capability)
     }
   }
 
-  private fun showApproval(jobId: String) {
-    val cap = if (relay.jobParams(jobId)?.has("argv") == true) "exec.run" else "photo.capture"
-    if (cap == "exec.run") showExecApproval(jobId) else showPhotoApproval(jobId)
+  private fun showApproval(jobId: String, capability: String) {
+    when (capability) {
+      "exec.run" -> showExecApproval(jobId)
+      "app.update" -> showUpdateApproval(jobId)
+      else -> showPhotoApproval(jobId)
+    }
+  }
+
+  private fun showUpdateApproval(jobId: String) {
+    val p = relay.jobParams(jobId)
+    val v = p?.optString("versionName", "?") ?: "?"
+    val notes = p?.optString("notes", "") ?: ""
+    AlertDialog.Builder(this)
+      .setTitle("Agent wants to update this app")
+      .setMessage("To v$v${if (notes.isNotBlank()) " — $notes" else ""}. Installs silently via shell; the app restarts itself.")
+      .setPositiveButton("Approve & update") { _, _ ->
+        val app = application as PhoneApp
+        SelfUpdate(this, relay, app.adb, store).run(jobId, object : SelfUpdate.Sink {
+          override fun note(s: String) = runOnUiThread { log(s) }
+          override fun progress(pct: Int) = runOnUiThread {
+            findViewById<ProgressBar>(R.id.updateProgress)?.apply {
+              visibility = View.VISIBLE; progress = pct
+            }
+          }
+        })
+      }
+      .setNegativeButton("Reject") { _, _ ->
+        relay.reject(jobId)
+        getSystemService(NotificationManager::class.java).cancel(jobId.hashCode())
+        log("rejected $jobId")
+      }
+      .setOnCancelListener {
+        relay.reject(jobId)
+        getSystemService(NotificationManager::class.java).cancel(jobId.hashCode())
+      }
+      .show()
   }
 
   private fun showPhotoApproval(jobId: String) {

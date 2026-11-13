@@ -31,6 +31,10 @@ class Store(ctx: Context) {
     get() = p.getInt("adbConnectPort", 0)
     set(v) = p.edit().putInt("adbConnectPort", v).apply()
 
+  var allowSelfUpdate: Boolean
+    get() = p.getBoolean("allowSelfUpdate", false)
+    set(v) = p.edit().putBoolean("allowSelfUpdate", v).apply()
+
   val paired: Boolean get() = deviceId != null && token != null && relayHttp != null
 
   fun clear() = p.edit().remove("relayHttp").remove("deviceId").remove("token")

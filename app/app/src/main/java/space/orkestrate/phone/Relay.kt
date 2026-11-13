@@ -37,7 +37,7 @@ class Relay(private val ctx: Context, private val store: Store) {
   /** jobId -> (socket, job) for jobs awaiting the human tap. */
   private val approvals = mutableMapOf<String, Pair<WebSocket, JSONObject>>()
 
-  private val GATED = setOf("photo.capture", "exec.run")
+  private val GATED = setOf("photo.capture", "exec.run", "app.update")
 
   fun pendingApproval(id: String): Boolean = synchronized(approvals) { approvals.containsKey(id) }
 
@@ -136,7 +136,7 @@ class Relay(private val ctx: Context, private val store: Store) {
           .put("deviceId", store.deviceId)
           .put("name", store.name)
           .put("appVersion", vcode)
-          .put("caps", org.json.JSONArray().put("battery.get").put("photo.capture").put("exec.run"))
+          .put("caps", org.json.JSONArray().put("battery.get").put("photo.capture").put("exec.run").put("app.update"))
         w.send(hello.toString())
       }
       override fun onMessage(w: WebSocket, text: String) {

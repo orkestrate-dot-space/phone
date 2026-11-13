@@ -95,6 +95,17 @@ Empirical boundary (SM-M176B, Android 16, Samsung — live runs):
 - Verdict: recon-grade shell (props, `date`, `uname`, readable files), not a
   terminal. System introspection (`dumpsys` etc.) stays shell-privileged.
 
+### `app.update` (approval-gated, or headless with opt-in)
+`{"versionCode":29,"versionName":"0.17.12","notes":"…"}` → `{"updated":true,"version":"0.17.12"}`.
+Why a capability and not two shell commands: the device shell has no HTTP
+client, can't write anywhere the installer accepts, and can't present the
+relay token. So the split is forced — **app downloads** (only it holds the
+token), **shell installs** (`adb install -r` streams from app-private cache,
+no readable-path problem, no on-device tap). Opted-in devices run it
+headless; everyone else gets the approval card. The installer kills our
+process mid-install, so the job resolves on a real result when lucky and by
+relay timeout otherwise — the agent verifies by `appVersion` on next hello.
+
 ## Approval rule (v0 and forever)
 
 No API call — from the agent, the relay, or anyone holding the device key —
@@ -132,6 +143,8 @@ Rules, all load-bearing:
 - `phone.status` → paired devices + online state + app versions.
 - `phone.battery` → waits for job result (60s; queues while offline, delivers on hello).
 - `phone.capture_photo` → approval-gated, 300s window.
+- `phone.exec` → approval-gated (or auto for the allowlist); result carries `tier`.
+- `phone.update` → ships the relay's dist build to the phone (see `app.update`).
 - `phone.pair` → mints a pairing code (10 min, single use). The ONLY minter.
 - `phone.pair_list` → devices (keys never leave the relay).
 - `phone.revoke {deviceId}` → drops key + socket, fails its queued jobs.

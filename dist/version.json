@@ -1,1 +1,1 @@
-{"versionCode":28,"versionName":"0.17.11","notes":"single shell owner; background auto-run; instant pickup"}
+{"versionCode":29,"versionName":"0.17.12","notes":"agent-driven silent self-update (app.update)"}
