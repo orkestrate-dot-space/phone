@@ -204,14 +204,63 @@ const TOOLS = [
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
   { name: "phone.pair", description: "Mint a pairing code (10 min, single use)",
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+  { name: "phone.pair_list", description: "Paired devices (keys never shown)",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+  { name: "phone.revoke", description: "Revoke a device: drops its key and socket",
+    inputSchema: { type: "object", properties: { deviceId: { type: "string" } }, required: ["deviceId"], additionalProperties: false } },
+  { name: "phone.jobs", description: "Jobs currently queued or awaiting results",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+  { name: "phone.doctor", description: "Relay health: listener, tunnel, devices, queues",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false } },
 ];
 
-async function callTool(name: string) {
+async function callTool(name: string, params?: any) {
   if (name === "phone.status") {
     return {
       paired: devices.size > 0,
       devices: [...devices.values()].map(d => ({ id: d.id, name: d.name,
         appVersion: d.appVersion ?? null, online: online(d.id), lastSeen: d.lastSeen })),
+    };
+  }
+  if (name === "phone.pair_list") {
+    return {
+      devices: [...devices.values()].map(d => ({ id: d.id, name: d.name,
+        appVersion: d.appVersion ?? null, online: online(d.id), lastSeen: d.lastSeen })),
+    };
+  }
+  if (name === "phone.revoke") {
+    const id = params?.deviceId;
+    const dev = devices.get(id);
+    if (!dev) throw new Error("unknown device");
+    devices.delete(id); byToken.delete(dev.token);
+    try { sockets.get(id)?.close(4403, "revoked"); } catch {}
+    sockets.delete(id);
+    for (const [jid, w] of waiting) {
+      if (w.deviceId === id) { clearTimeout(w.timer); waiting.delete(jid);
+        w.reject(new Error("device revoked")); }
+    }
+    await save();
+    log(`revoked ${id}`);
+    return { revoked: id };
+  }
+  if (name === "phone.jobs") {
+    return {
+      waiting: [...waiting.entries()].map(([id, w]) => ({ id,
+        capability: w.cap, deviceId: w.deviceId, live: online(w.deviceId) })),
+    };
+  }
+  if (name === "phone.doctor") {
+    let tunnel: unknown = "unknown (opentunnel CLI not on PATH?)";
+    try {
+      const p = Bun.spawnSync(["/home/pracurser/.bun/bin/opentunnel", "route", "list"]);
+      tunnel = new TextDecoder().decode(p.stdout).trim() || "(no routes)";
+    } catch { tunnel = "opentunnel unavailable"; }
+    return {
+      relay: { port: PORT, uptimeSec: Math.round(performance.now() / 1000) },
+      tunnelRoutes: tunnel,
+      devices: devices.size, online: [...sockets.keys()],
+      queuedJobs: [...waiting.values()].filter(w => !online(w.deviceId)).length,
+      liveJobs: [...waiting.values()].filter(w => online(w.deviceId)).length,
     };
   }
   if (name === "phone.pair") {
@@ -261,7 +310,7 @@ async function handle(msg: any) {
       case "tools/call": {
         const name = msg.params?.name;
         try {
-          const out = await callTool(name);
+          const out = await callTool(name, msg.params?.arguments);
           if (id !== undefined) reply(id, { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] });
         } catch (e) { if (id !== undefined) replyErr(id, -32000, (e as Error).message); }
         break;

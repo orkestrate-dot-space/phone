@@ -81,11 +81,15 @@ Rules, all load-bearing:
 - Same WiFi keeps working with the LAN URL; switch relay address in the
   app's advanced box, no re-pair needed (the device token is URL-independent).
 
-## MCP surface (v0, all live)
+## MCP surface (live)
 
-- `phone.status` → paired devices + online state.
-- `phone.battery` → waits for job result (60s timeout).
+- `phone.status` → paired devices + online state + app versions.
+- `phone.battery` → waits for job result (60s; queues while offline, delivers on hello).
 - `phone.capture_photo` → approval-gated, 300s window.
 - `phone.pair` → mints a pairing code (10 min, single use). The ONLY minter.
+- `phone.pair_list` → devices (keys never leave the relay).
+- `phone.revoke {deviceId}` → drops key + socket, fails its queued jobs.
+- `phone.jobs` → queued/awaiting jobs.
+- `phone.doctor` → listener, tunnel routes, devices, queue depths.
 
-Later: `phone.request`, `phone.pair_list/revoke`, `phone.doctor`.
+Later: `phone.request` (generic approval card), `phone.sms_otp`, `phone.location`.
