@@ -4,17 +4,22 @@ import android.app.Application
 import android.content.Intent
 import android.os.Build
 
-/** Single Relay owner. The foreground service holds the socket; the UI only listens. */
+/** Single Relay + AdbShell owner. The service holds sockets; the UI only listens. */
 class PhoneApp : Application() {
   lateinit var store: Store
     private set
   lateinit var relay: Relay
     private set
+  lateinit var adb: AdbShell
+    private set
+  /** Foreground UI listener, if any. The service forwards events here. */
+  @Volatile var uiListener: Relay.Listener? = null
 
   override fun onCreate() {
     super.onCreate()
     store = Store(this)
     relay = Relay(this, store)
+    adb = AdbShell(this)
   }
 
   fun ensureService() {

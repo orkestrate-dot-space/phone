@@ -64,9 +64,8 @@ class MainActivity : Activity(), Relay.Listener {
     val app = application as PhoneApp
     store = app.store
     relay = app.relay
-    adb = AdbShell(this)
-    relay.listener = this
-    store.adbSerial?.let { adb.setSerial(it) }
+    adb = app.adb
+    app.uiListener = this
 
     dot = findViewById(R.id.dot)
     status = findViewById(R.id.status)
@@ -312,9 +311,7 @@ class MainActivity : Activity(), Relay.Listener {
 
   override fun onResume() {
     super.onResume()
-    relay.listener = this
-    // pick up a shell session paired while we were away (receiver persists it)
-    if (adb.serial == null) store.adbSerial?.let { adb.setSerial(it) }
+    (application as PhoneApp).uiListener = this
     refreshAll()
     // Live pair-dialog status; the service owns posting the notification.
     if (adb.serial == null) {
@@ -347,47 +344,22 @@ class MainActivity : Activity(), Relay.Listener {
     identity.text = "${store.name} is how agents call this phone."
   }
 
-  // ---- approval surface ----
-  override fun onApproval(jobId: String, capability: String) {
-    runOnUiThread {
-      val argv = relay.jobParams(jobId)?.optJSONArray("argv")
-        ?.let { a -> (0 until a.length()).map { a.getString(it) } }
-      if (capability == "exec.run" && argv != null && store.autoApprove && ExecPolicy.auto(argv)) {
-        log("auto-run (allowlisted): ${argv.joinToString(" ")}")
-        runExec(jobId, argv)
-      } else {
-        notifyApproval(jobId, capability)
-        showApproval(jobId)
-      }
-    }
+  override fun onDestroy() {
+    val app = application as PhoneApp
+    if (app.uiListener === this) app.uiListener = null
+    super.onDestroy()
   }
 
-  private fun notifyApproval(jobId: String, capability: String) {
-    if (Build.VERSION.SDK_INT >= 33 &&
-      checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-      requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 41)
+  // ---- approval surface (service posts the notification; we show the card) ----
+  override fun onApproval(jobId: String, capability: String) {
+    runOnUiThread {
+      // service may have settled it headlessly (auto-approve) — don't double-run
+      if (!relay.pendingApproval(jobId)) {
+        log("job $jobId settled in background")
+        return@runOnUiThread
+      }
+      showApproval(jobId)
     }
-    val nm = getSystemService(NotificationManager::class.java)
-    nm.createNotificationChannel(NotificationChannel("jobs", "agent jobs", NotificationManager.IMPORTANCE_HIGH))
-    val open = PendingIntent.getActivity(
-      this, jobId.hashCode(),
-      Intent(this, MainActivity::class.java).putExtra("approval", jobId),
-      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-    val (title, text) = if (capability == "exec.run") {
-      "Agent wants to run a command" to (relay.jobParams(jobId)?.optJSONArray("argv")
-        ?.let { a -> (0 until a.length()).joinToString(" ") { a.getString(it) } }
-        ?.take(120) ?: "…")
-    } else {
-      "Agent requests a photo" to "Tap to approve or reject"
-    }
-    val n = android.app.Notification.Builder(this, "jobs")
-      .setSmallIcon(if (capability == "exec.run") android.R.drawable.ic_menu_manage else android.R.drawable.ic_menu_camera)
-      .setContentTitle(title)
-      .setContentText(text)
-      .setContentIntent(open)
-      .setAutoCancel(true)
-      .build()
-    nm.notify(jobId.hashCode(), n)
   }
 
   private fun showApproval(jobId: String) {
@@ -410,10 +382,15 @@ class MainActivity : Activity(), Relay.Listener {
   private fun showExecApproval(jobId: String) {
     val argv = relay.jobParams(jobId)?.optJSONArray("argv")
       ?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList()
+    val tier = if ((application as PhoneApp).adb.serial != null) "shell-UID" else "app sandbox"
     AlertDialog.Builder(this)
       .setTitle("Agent wants to run a command")
-      .setMessage("Runs as this app (no root). Approve runs exactly:\n\n${argv.joinToString(" ")}")
-      .setPositiveButton("Approve & run") { _, _ -> runExec(jobId, argv) }
+      .setMessage("Runs as $tier. Approve runs exactly:\n\n${argv.joinToString(" ")}")
+      .setPositiveButton("Approve & run") { _, _ ->
+        runner().runExec(jobId, argv, object : ExecRunner.Sink {
+          override fun note(s: String) = runOnUiThread { log(s) }
+        })
+      }
       .setNegativeButton("Reject") { _, _ ->
         relay.reject(jobId); cancelNotif(jobId); log("rejected $jobId")
       }
@@ -421,71 +398,9 @@ class MainActivity : Activity(), Relay.Listener {
       .show()
   }
 
-  /** Executor allowlist (app-UID tier). logcat: own-UID logs only, diagnostics. */
-  private val EXEC_ALLOW = setOf("ls", "cat", "echo", "date", "uname", "getprop", "df", "du", "head", "logcat")
-  /** Shell tier: the full adb-shell surface (still argv-array, still approved). */
-  private val SHELL_ALLOW = EXEC_ALLOW + setOf(
-    "dumpsys", "cmd", "pm", "settings", "input", "logcat", "am", "wm",
-    "appops", "service", "svc", "getevent", "screencap", "screenrecord")
-
-  private fun runExec(jobId: String, argv: List<String>) {
-    Thread {
-      try {
-        val cmd = argv.toMutableList()
-        val bin = cmd[0]
-        val allowed = if (adb.serial != null) SHELL_ALLOW else EXEC_ALLOW
-        if ("/" !in bin) {
-          if (bin !in allowed) throw IllegalArgumentException("not allowed: $bin")
-          cmd[0] = "/system/bin/$bin"
-        } else {
-          if (!bin.startsWith("/system/bin/")) throw IllegalArgumentException("only /system/bin: $bin")
-        }
-        val timeoutSec = (relay.jobParams(jobId)?.optInt("timeoutSec", 30) ?: 30).coerceIn(5, 120)
-        // Tier S (shell-UID) when the embedded ADB channel is up, else app-UID.
-        val sh = adb.serial?.let { adb.exec(cmd, timeoutSec) }
-        if (sh != null && !adb.looksDead(sh)) {
-          finishExec(jobId, sh.exit, sh.stdout.toByteArray(), sh.stderr.toByteArray(), "shell")
-          return@Thread
-        }
-        if (sh != null) adb.drop()
-        val proc = ProcessBuilder(cmd).redirectErrorStream(false).start()
-        val out = java.io.ByteArrayOutputStream()
-        val err = java.io.ByteArrayOutputStream()
-        val t1 = Thread { try { proc.inputStream.copyTo(out) } catch (_: Exception) {} }
-        val t2 = Thread { try { proc.errorStream.copyTo(err) } catch (_: Exception) {} }
-        t1.start(); t2.start()
-        val done = proc.waitFor(timeoutSec.toLong(), java.util.concurrent.TimeUnit.SECONDS)
-        t1.join(2000); t2.join(2000)
-        cancelNotif(jobId)
-        if (!done) {
-          proc.destroyForcibly()
-          relay.reject(jobId, "timed out after ${timeoutSec}s")
-          runOnUiThread { log("exec $jobId timed out") }
-          return@Thread
-        }
-        val cap = 65536
-        val so = out.toByteArray(); val se = err.toByteArray()
-        finishExec(jobId, proc.exitValue(), so, se, "app")
-      } catch (e: Exception) {
-        Log.d("phone", "exec fail: $e")
-        cancelNotif(jobId)
-        relay.reject(jobId, "exec failed: ${e.message}")
-        runOnUiThread { log("exec failed: ${e.message}") }
-      }
-    }.start()
-  }
-
-  private fun finishExec(jobId: String, exit: Int, so: ByteArray, se: ByteArray, tier: String) {
-    cancelNotif(jobId)
-    val cap = 65536
-    val data = org.json.JSONObject()
-      .put("exit", exit)
-      .put("tier", tier)
-      .put("stdout", String(so, 0, minOf(so.size, cap)))
-      .put("stderr", String(se, 0, minOf(se.size, cap)))
-      .put("truncated", so.size > cap || se.size > cap)
-    relay.approve(jobId, data)
-    runOnUiThread { log("exec $jobId [$tier] exit=$exit") }
+  private fun runner(): ExecRunner {
+    val app = application as PhoneApp
+    return ExecRunner(this, relay, app.adb, store)
   }
 
   private fun cancelNotif(jobId: String) {

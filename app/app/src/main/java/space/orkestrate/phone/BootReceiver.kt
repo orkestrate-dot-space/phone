@@ -22,13 +22,12 @@ class BootReceiver : BroadcastReceiver() {
           android.provider.Settings.Global.putInt(
             ctx.contentResolver, "adb_wifi_enabled", 1)
           Thread.sleep(3000)
-          val adb = AdbShell(ctx)
-          val serial = app.store.adbSerial
-          val port = serial?.substringAfterLast(":")?.toIntOrNull()
-          if (app.store.adbPaired && port != null && adb.connect(port)) {
-            app.store.adbSerial = adb.serial
+          app.adb.setSerial(app.store.adbSerial)
+          val port = app.store.adbSerial?.substringAfterLast(":")?.toIntOrNull()
+          if (app.store.adbPaired && port != null && app.adb.connect(port)) {
+            app.store.adbSerial = app.adb.serial
             Log.d("phone", "boot: shell reconnected")
-          }
+          } else app.adb.drop()
         }
       } catch (e: Exception) {
         Log.d("phone", "boot adb: $e")
