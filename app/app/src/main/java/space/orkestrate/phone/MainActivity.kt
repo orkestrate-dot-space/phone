@@ -46,13 +46,13 @@ class MainActivity : Activity(), Relay.Listener {
   private lateinit var relayIn: EditText
   private lateinit var codeIn: EditText
   private lateinit var setupBox: LinearLayout
-  private lateinit var mainBox: LinearLayout
+  private lateinit var statusBox: LinearLayout
   private lateinit var lastJob: TextView
-  private lateinit var advBox: LinearLayout
   private lateinit var advRelay: TextView
   private lateinit var advDevice: TextView
   private lateinit var logView: TextView
   private val logLines = ArrayDeque<String>()
+  private var currentTab = "status"
 
   private var pendingShot: Uri? = null
   private var pendingJob: String? = null
@@ -76,12 +76,14 @@ class MainActivity : Activity(), Relay.Listener {
     relayIn = findViewById(R.id.relayIn)
     codeIn = findViewById(R.id.codeIn)
     setupBox = findViewById(R.id.setupBox)
-    mainBox = findViewById(R.id.mainBox)
+    statusBox = findViewById(R.id.statusBox)
     lastJob = findViewById(R.id.lastJob)
-    advBox = findViewById(R.id.advBox)
     advRelay = findViewById(R.id.advRelay)
     advDevice = findViewById(R.id.advDevice)
     logView = findViewById(R.id.logView)
+    findViewById<Button>(R.id.tabStatus).setOnClickListener { showTab("status") }
+    findViewById<Button>(R.id.tabShell).setOnClickListener { showTab("shell") }
+    findViewById<Button>(R.id.tabSettings).setOnClickListener { showTab("settings") }
 
     nameIn.setText(store.name)
     findViewById<Button>(R.id.saveName).setOnClickListener {
@@ -114,9 +116,6 @@ class MainActivity : Activity(), Relay.Listener {
       cm.setPrimaryClip(android.content.ClipData.newPlainText("agent",
         findViewById<TextView>(R.id.agentPrompt).text))
       log("prompt copied — paste it into your agent")
-    }
-    findViewById<TextView>(R.id.advToggle).setOnClickListener {
-      advBox.visibility = if (advBox.visibility == View.GONE) View.VISIBLE else View.GONE
     }
     findViewById<Button>(R.id.unpairBtn).setOnClickListener {
       try { adb.disconnectAll() } catch (_: Exception) {}
@@ -157,15 +156,17 @@ class MainActivity : Activity(), Relay.Listener {
         } catch (e2: Exception) { log("settings failed: ${e2.message}") }
       }
     }
-    findViewById<Button>(R.id.autoBtn).setOnClickListener {
-      store.autoApprove = !store.autoApprove
+    findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.autoSwitch).setOnCheckedChangeListener { v, on ->
+      if (!v.isPressed) return@setOnCheckedChangeListener
+      store.autoApprove = on
       refreshAutoStatus()
-      log("auto-approve ${if (store.autoApprove) "ON" else "OFF"}")
+      log("auto-approve ${if (on) "ON" else "OFF"}")
     }
-    findViewById<Button>(R.id.selfUpdateBtn).setOnClickListener {
-      store.allowSelfUpdate = !store.allowSelfUpdate
+    findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.selfUpdateSwitch).setOnCheckedChangeListener { v, on ->
+      if (!v.isPressed) return@setOnCheckedChangeListener
+      store.allowSelfUpdate = on
       refreshAutoStatus()
-      log("agent self-update ${if (store.allowSelfUpdate) "ON" else "OFF"}")
+      log("agent self-update ${if (on) "ON" else "OFF"}")
     }
     findViewById<Button>(R.id.shellSettings).setOnClickListener {
       val devOn = try {
@@ -232,6 +233,7 @@ class MainActivity : Activity(), Relay.Listener {
       if (relay.pendingApproval(id)) showApproval(id, capabilityOf(id))
       else log("approval $id already settled")
     }
+    showTab(currentTab)
     // one-time notification permission ask (approval cards live in the shade)
     if (android.os.Build.VERSION.SDK_INT >= 33 &&
       checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
@@ -277,7 +279,7 @@ class MainActivity : Activity(), Relay.Listener {
     findViewById<EditText>(R.id.relayEdit).setText(store.relayHttp ?: "")
     advDevice.text = store.deviceId ?: "—"
     setupBox.visibility = if (store.paired) View.GONE else View.VISIBLE
-    mainBox.visibility = if (store.paired) View.VISIBLE else View.GONE
+    statusBox.visibility = if (store.paired) View.VISIBLE else View.GONE
     try {
       val pkg = packageManager.getPackageInfo(packageName, 0)
       val vc = if (android.os.Build.VERSION.SDK_INT >= 28) pkg.longVersionCode else @Suppress("DEPRECATION") pkg.versionCode.toLong()
@@ -302,12 +304,16 @@ class MainActivity : Activity(), Relay.Listener {
     findViewById<TextView>(R.id.autoStatus).text =
       if (on) "ON — listed commands run without a tap, everything else asks"
       else "OFF — every command asks"
-    findViewById<Button>(R.id.autoBtn).text = if (on) "Turn off" else "Turn on"
+    findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.autoSwitch).apply {
+      if (isChecked != on) isChecked = on
+    }
     val su = store.allowSelfUpdate
     findViewById<TextView>(R.id.selfUpdateStatus).text =
       if (su) "ON — the agent ships updates itself, no taps"
       else "OFF — updates need your tap (check button or approval card)"
-    findViewById<Button>(R.id.selfUpdateBtn).text = if (su) "Turn off" else "Let agent update"
+    findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.selfUpdateSwitch).apply {
+      if (isChecked != su) isChecked = su
+    }
   }
 
   private fun shellNote(s: String) {
@@ -371,6 +377,16 @@ class MainActivity : Activity(), Relay.Listener {
     if (s == lastShellNote) return
     lastShellNote = s
     shellNote(s)
+  }
+
+  private fun showTab(name: String) {
+    currentTab = name
+    findViewById<LinearLayout>(R.id.tabStatusBody).visibility = if (name == "status") View.VISIBLE else View.GONE
+    findViewById<LinearLayout>(R.id.tabShellBody).visibility = if (name == "shell") View.VISIBLE else View.GONE
+    findViewById<LinearLayout>(R.id.tabSettingsBody).visibility = if (name == "settings") View.VISIBLE else View.GONE
+    for ((id, key) in listOf(R.id.tabStatus to "status", R.id.tabShell to "shell", R.id.tabSettings to "settings")) {
+      findViewById<Button>(id).alpha = if (key == name) 1f else 0.55f
+    }
   }
 
   override fun onResume() {

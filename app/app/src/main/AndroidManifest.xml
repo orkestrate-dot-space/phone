@@ -17,7 +17,7 @@
     android:label="phone"
     android:usesCleartextTraffic="true"
     android:extractNativeLibs="true"
-    android:theme="@android:style/Theme.Material.NoActionBar">
+    android:theme="@style/Theme.Phone">
 
     <service
       android:name=".RelayService"
