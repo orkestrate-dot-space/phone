@@ -61,11 +61,24 @@ What the sandbox actually allows (verified against AOSP sepolicy + behavior docs
 - APK-embedded native-lib ELFs are the only shippable binaries (PackageManager
   extracts `.so` by suffix without content checks). Reserved for later.
 
-Rules: argv-array form only, never `sh -c` interpolation (Mode B shell scripts
-deferred); absolute path or bare name resolved against `/system/bin` + a small
-allowlist (`ls cat echo date uname getprop df du head`); 30s timeout, kill on
-expiry; stdout/stderr capped 64KB each with `truncated` flags. Play would flag
-remote-driven exec — sideload-only until that story exists.
+### Shell tier (embedded ADB, v16)
+When the in-app ADB channel is paired + connected, `exec.run` commands run as
+shell-UID (uid 2000): `dumpsys`, `cmd`, `pm`, `settings`, `input`, `logcat` —
+the full `adb shell` surface. Falls back to app-UID when the channel is down.
+Result envelope gains `"tier":"shell"|"app"`, so the agent knows what it got.
+Shell channel: prebuilt adb server binary in `jniLibs` (LADB project, BSD —
+see `THIRD_PARTY_NOTICES.md`), paired once to the phone's own wireless
+debugging over loopback; ADB keys persist in app storage; the wireless toggle
+auto-restores after reboot once `WRITE_SECURE_SETTINGS` self-grants through
+the first shell. Approval card and auto-approve policy apply unchanged —
+tier changes privilege, never authorization.
+
+Rules (all tiers): argv-array form only, never `sh -c` interpolation;
+absolute path or bare name resolved against `/system/bin` + a small
+allowlist (`ls cat echo date uname getprop df du head dumpsys cmd pm settings
+input logcat` — shell tier; app tier keeps the original recon subset); 30s
+timeout, kill on expiry; stdout/stderr capped 64KB each with `truncated`
+flags. Play would flag remote-driven exec — sideload-only until that story exists.
 
 ### Auto-approve policy (locked down, user opt-in)
 - Master toggle in-app (default OFF). When ON, **exact-match** argv in

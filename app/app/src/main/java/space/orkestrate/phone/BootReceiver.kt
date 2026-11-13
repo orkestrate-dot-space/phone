@@ -3,14 +3,36 @@ package space.orkestrate.phone
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.util.Log
 
-/** Re-hold the socket after a reboot (best effort; background FGS start may be refused on 14+). */
+/** Re-hold the sockets after a reboot (best effort). */
 class BootReceiver : BroadcastReceiver() {
   override fun onReceive(ctx: Context, intent: Intent) {
     if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
     try {
-      (ctx.applicationContext as PhoneApp).ensureService()
+      val app = ctx.applicationContext as PhoneApp
+      app.ensureService()
+      // ADB channel: re-enable wireless debugging if we hold the permission,
+      // then reconnect with persisted keys.
+      try {
+        if (app.packageManager.checkPermission(
+            "android.permission.WRITE_SECURE_SETTINGS", app.packageName) ==
+            PackageManager.PERMISSION_GRANTED) {
+          android.provider.Settings.Global.putInt(
+            ctx.contentResolver, "adb_wifi_enabled", 1)
+          Thread.sleep(3000)
+          val adb = AdbShell(ctx)
+          val serial = app.store.adbSerial
+          val port = serial?.substringAfterLast(":")?.toIntOrNull()
+          if (app.store.adbPaired && port != null && adb.connect(port)) {
+            app.store.adbSerial = adb.serial
+            Log.d("phone", "boot: shell reconnected")
+          }
+        }
+      } catch (e: Exception) {
+        Log.d("phone", "boot adb: $e")
+      }
     } catch (e: Exception) {
       Log.d("phone", "boot start refused: $e")
     }

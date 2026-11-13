@@ -1,1 +1,1 @@
-{"versionCode":15,"versionName":"0.15.0","notes":"auto-approve allowlist for read-only recon"}
+{"versionCode":16,"versionName":"0.16.0","notes":"embedded ADB shell tier (shell-UID exec, no second app)"}

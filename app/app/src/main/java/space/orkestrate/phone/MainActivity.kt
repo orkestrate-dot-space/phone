@@ -36,6 +36,7 @@ class MainActivity : Activity(), Relay.Listener {
 
   private lateinit var store: Store
   private lateinit var relay: Relay
+  private lateinit var adb: AdbShell
 
   private lateinit var dot: View
   private lateinit var status: TextView
@@ -62,7 +63,9 @@ class MainActivity : Activity(), Relay.Listener {
     val app = application as PhoneApp
     store = app.store
     relay = app.relay
+    adb = AdbShell(this)
     relay.listener = this
+    store.adbSerial?.let { adb.setSerial(it) }
 
     dot = findViewById(R.id.dot)
     status = findViewById(R.id.status)
@@ -99,9 +102,11 @@ class MainActivity : Activity(), Relay.Listener {
       advBox.visibility = if (advBox.visibility == View.GONE) View.VISIBLE else View.GONE
     }
     findViewById<Button>(R.id.unpairBtn).setOnClickListener {
+      try { adb.disconnectAll() } catch (_: Exception) {}
+      adb.drop()
       relay.disconnect(); store.clear()
       stopService(Intent(this, RelayService::class.java))
-      refreshAll(); log("unpaired")
+      refreshAll(); refreshShellStatus(); log("unpaired")
     }
     findViewById<Button>(R.id.updateBtn).setOnClickListener { checkUpdate() }
     findViewById<Button>(R.id.bgBtn).setOnClickListener {
@@ -123,6 +128,58 @@ class MainActivity : Activity(), Relay.Listener {
       refreshAutoStatus()
       log("auto-approve ${if (store.autoApprove) "ON" else "OFF"}")
     }
+    findViewById<Button>(R.id.shellScan).setOnClickListener {
+      shellNote("scanning…")
+      adb.scanPorts { ports ->
+        runOnUiThread {
+          if (ports.isNotEmpty()) {
+            findViewById<EditText>(R.id.shellPort).setText(ports.first().toString())
+            shellNote("found: ${ports.joinToString(", ")}")
+          } else shellNote("nothing found — is wireless debugging on?")
+        }
+      }
+    }
+    findViewById<Button>(R.id.shellConnect).setOnClickListener {
+      val port = findViewById<EditText>(R.id.shellPort).text.toString().toIntOrNull()
+      if (port == null) { shellNote("enter the connect port (or Scan)"); return@setOnClickListener }
+      shellNote("connecting…")
+      Thread {
+        val ok = adb.connect(port)
+        if (ok) {
+          store.adbSerial = adb.serial; store.adbPaired = true
+          selfGrantShell()
+        }
+        runOnUiThread { refreshShellStatus(); if (ok) log("shell connected: ${adb.serial}") }
+      }.start()
+    }
+    findViewById<Button>(R.id.shellPair).setOnClickListener {
+      val pairPort = findViewById<EditText>(R.id.shellPairPort).text.toString().toIntOrNull()
+      val code = findViewById<EditText>(R.id.shellCode).text.toString().trim()
+      if (pairPort == null || code.isBlank()) { shellNote("pair port + code from Settings"); return@setOnClickListener }
+      shellNote("pairing…")
+      Thread {
+        val ok = adb.pair("127.0.0.1", pairPort, code)
+        runOnUiThread {
+          if (!ok) { shellNote("pair failed — check code/port"); return@runOnUiThread }
+          store.adbPaired = true
+          shellNote("paired — scanning for connect port…")
+          adb.scanPorts { ports ->
+            runOnUiThread {
+              val port = ports.firstOrNull()
+              if (port == null) { shellNote("paired — enter connect port manually"); refreshShellStatus(); return@runOnUiThread }
+              findViewById<EditText>(R.id.shellPort).setText(port.toString())
+              Thread {
+                if (adb.connect(port)) {
+                  store.adbSerial = adb.serial
+                  selfGrantShell()
+                }
+                runOnUiThread { refreshShellStatus() }
+              }.start()
+            }
+          }
+        }
+      }.start()
+    }
     findViewById<Button>(R.id.relaySave).setOnClickListener {
       val r = findViewById<EditText>(R.id.relayEdit).text.toString().trim()
       if (r.isBlank()) { log("relay address empty"); return@setOnClickListener }
@@ -137,6 +194,18 @@ class MainActivity : Activity(), Relay.Listener {
     handleDeepLink(intent)
     refreshAll()
     if (store.paired) (application as PhoneApp).ensureService() else onState("not paired")
+    // silent ADB-channel restore (keys persist; toggle may need a manual flip)
+    if (store.adbPaired && adb.serial != null) {
+      Thread {
+        val s = adb.serial!!
+        val port = s.substringAfterLast(":").toIntOrNull()
+        val ok = if (port != null) adb.connect(port) else false
+        if (ok) selfGrantShell()
+        runOnUiThread { refreshShellStatus() }
+      }.start()
+    } else {
+      refreshShellStatus()
+    }
 
     // opened from the approval notification?
     intent.getStringExtra("approval")?.let { id ->
@@ -191,6 +260,31 @@ class MainActivity : Activity(), Relay.Listener {
       if (on) "ON — listed commands run without a tap, everything else asks"
       else "OFF — every command asks"
     findViewById<Button>(R.id.autoBtn).text = if (on) "Turn off" else "Turn on"
+  }
+
+  private fun shellNote(s: String) {
+    findViewById<TextView>(R.id.shellStatus).text = s
+    log("shell: $s")
+  }
+
+  private fun refreshShellStatus() {
+    findViewById<TextView>(R.id.shellStatus).text = when {
+      adb.serial != null -> "connected — ${adb.serial} (shell-UID)"
+      store.adbPaired -> "paired — tap Connect (enable wireless debugging first)"
+      else -> "not paired — enable wireless debugging, then Pair"
+    }
+  }
+
+  /** Grant ourselves WRITE_SECURE_SETTINGS through our own shell (one-time). */
+  private fun selfGrantShell() {
+    try {
+      if (packageManager.checkPermission(
+          "android.permission.WRITE_SECURE_SETTINGS", packageName) ==
+          PackageManager.PERMISSION_GRANTED) return
+      val r = adb.exec(listOf("pm", "grant", packageName,
+        "android.permission.WRITE_SECURE_SETTINGS"), 15)
+      Log.d("phone", "self-grant: ${r.exit}")
+    } catch (e: Exception) { Log.d("phone", "self-grant fail: $e") }
   }
 
   override fun onResume() {
@@ -278,19 +372,31 @@ class MainActivity : Activity(), Relay.Listener {
   }
 
   private val EXEC_ALLOW = setOf("ls", "cat", "echo", "date", "uname", "getprop", "df", "du", "head")
+  /** Shell tier: the full adb-shell surface (still argv-array, still approved). */
+  private val SHELL_ALLOW = EXEC_ALLOW + setOf(
+    "dumpsys", "cmd", "pm", "settings", "input", "logcat", "am", "wm",
+    "appops", "service", "svc", "getevent", "screencap", "screenrecord")
 
   private fun runExec(jobId: String, argv: List<String>) {
     Thread {
       try {
         val cmd = argv.toMutableList()
         val bin = cmd[0]
+        val allowed = if (adb.serial != null) SHELL_ALLOW else EXEC_ALLOW
         if ("/" !in bin) {
-          if (bin !in EXEC_ALLOW) throw IllegalArgumentException("not allowed: $bin")
+          if (bin !in allowed) throw IllegalArgumentException("not allowed: $bin")
           cmd[0] = "/system/bin/$bin"
         } else {
           if (!bin.startsWith("/system/bin/")) throw IllegalArgumentException("only /system/bin: $bin")
         }
         val timeoutSec = (relay.jobParams(jobId)?.optInt("timeoutSec", 30) ?: 30).coerceIn(5, 120)
+        // Tier S (shell-UID) when the embedded ADB channel is up, else app-UID.
+        val sh = adb.serial?.let { adb.exec(cmd, timeoutSec) }
+        if (sh != null && !adb.looksDead(sh)) {
+          finishExec(jobId, sh.exit, sh.stdout.toByteArray(), sh.stderr.toByteArray(), "shell")
+          return@Thread
+        }
+        if (sh != null) adb.drop()
         val proc = ProcessBuilder(cmd).redirectErrorStream(false).start()
         val out = java.io.ByteArrayOutputStream()
         val err = java.io.ByteArrayOutputStream()
@@ -308,13 +414,7 @@ class MainActivity : Activity(), Relay.Listener {
         }
         val cap = 65536
         val so = out.toByteArray(); val se = err.toByteArray()
-        val data = org.json.JSONObject()
-          .put("exit", proc.exitValue())
-          .put("stdout", String(so, 0, minOf(so.size, cap)))
-          .put("stderr", String(se, 0, minOf(se.size, cap)))
-          .put("truncated", so.size > cap || se.size > cap)
-        relay.approve(jobId, data)
-        runOnUiThread { log("exec $jobId exit=${proc.exitValue()}") }
+        finishExec(jobId, proc.exitValue(), so, se, "app")
       } catch (e: Exception) {
         Log.d("phone", "exec fail: $e")
         cancelNotif(jobId)
@@ -322,6 +422,19 @@ class MainActivity : Activity(), Relay.Listener {
         runOnUiThread { log("exec failed: ${e.message}") }
       }
     }.start()
+  }
+
+  private fun finishExec(jobId: String, exit: Int, so: ByteArray, se: ByteArray, tier: String) {
+    cancelNotif(jobId)
+    val cap = 65536
+    val data = org.json.JSONObject()
+      .put("exit", exit)
+      .put("tier", tier)
+      .put("stdout", String(so, 0, minOf(so.size, cap)))
+      .put("stderr", String(se, 0, minOf(se.size, cap)))
+      .put("truncated", so.size > cap || se.size > cap)
+    relay.approve(jobId, data)
+    runOnUiThread { log("exec $jobId [$tier] exit=$exit") }
   }
 
   private fun cancelNotif(jobId: String) {

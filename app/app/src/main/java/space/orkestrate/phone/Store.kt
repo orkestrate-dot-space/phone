@@ -18,9 +18,15 @@ class Store(ctx: Context) {
     get() = p.getBoolean("autoApprove", false)
     set(v) = p.edit().putBoolean("autoApprove", v).apply()
 
+  var adbSerial: String? get() = p.getString("adbSerial", null); set(v) = put("adbSerial", v)
+  var adbPaired: Boolean
+    get() = p.getBoolean("adbPaired", false)
+    set(v) = p.edit().putBoolean("adbPaired", v).apply()
+
   val paired: Boolean get() = deviceId != null && token != null && relayHttp != null
 
-  fun clear() = p.edit().remove("relayHttp").remove("deviceId").remove("token").apply()
+  fun clear() = p.edit().remove("relayHttp").remove("deviceId").remove("token")
+    .remove("adbSerial").remove("adbPaired").apply()
 
   private fun put(k: String, v: String?) =
     p.edit().apply { if (v == null) remove(k) else putString(k, v) }.apply()

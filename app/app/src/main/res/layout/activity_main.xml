@@ -216,6 +216,71 @@
         android:text="Turn on" />
       <TextView
         style="@style/RowTitle"
+        android:text="Shell (ADB)" />
+      <TextView
+        style="@style/RowDesc"
+        android:text="Embedded ADB server, paired to this phone's own wireless debugging. Shell-UID commands, no second app." />
+      <TextView
+        android:id="@+id/shellStatus"
+        style="@style/RowDesc"
+        android:text="checking…" />
+      <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+        <EditText
+          android:id="@+id/shellPort"
+          android:layout_width="0dp"
+          android:layout_height="wrap_content"
+          android:layout_weight="1"
+          android:hint="connect port"
+          android:textColor="#E6E9EF"
+          android:textColorHint="#6B7280"
+          android:singleLine="true"
+          android:inputType="number" />
+        <Button
+          android:id="@+id/shellScan"
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:text="Scan" />
+        <Button
+          android:id="@+id/shellConnect"
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:text="Connect" />
+      </LinearLayout>
+      <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+        <EditText
+          android:id="@+id/shellPairPort"
+          android:layout_width="0dp"
+          android:layout_height="wrap_content"
+          android:layout_weight="1"
+          android:hint="pair port"
+          android:textColor="#E6E9EF"
+          android:textColorHint="#6B7280"
+          android:singleLine="true"
+          android:inputType="number" />
+        <EditText
+          android:id="@+id/shellCode"
+          android:layout_width="0dp"
+          android:layout_height="wrap_content"
+          android:layout_weight="1"
+          android:hint="pair code"
+          android:textColor="#E6E9EF"
+          android:textColorHint="#6B7280"
+          android:singleLine="true"
+          android:inputType="number" />
+        <Button
+          android:id="@+id/shellPair"
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:text="Pair" />
+      </LinearLayout>
+      <TextView
+        style="@style/RowTitle"
         android:text="Log" />
       <TextView
         android:id="@+id/logView"
@@ -230,7 +295,7 @@
       <TextView
         android:id="@+id/updateStatus"
         style="@style/RowDesc"
-        android:text="v0.15.0 · no check yet" />
+        android:text="v0.16.0 · no check yet" />
       <Button
         android:id="@+id/updateBtn"
         android:layout_width="wrap_content"
