@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent"
+  android:background="#0B0E14"
+  android:padding="16dp">
+
+  <LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="#151A23"
+    android:padding="20dp">
+
+    <!-- header -->
+    <LinearLayout
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:orientation="horizontal">
+      <View
+        android:id="@+id/dot"
+        android:layout_width="8dp"
+        android:layout_height="8dp"
+        android:layout_marginTop="6dp"
+        android:layout_marginEnd="8dp"
+        android:background="#6B7280" />
+      <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+        <TextView
+          android:id="@+id/status"
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:text="not paired"
+          android:textColor="#E6E9EF"
+          android:textSize="16sp"
+          android:textStyle="bold" />
+        <TextView
+          android:id="@+id/identity"
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:textColor="#9AA3B2"
+          android:textSize="13sp" />
+      </LinearLayout>
+    </LinearLayout>
+
+    <!-- this phone -->
+    <TextView
+      style="@style/Section"
+      android:text="this phone" />
+    <TextView
+      style="@style/RowTitle"
+      android:text="Name for agents" />
+    <LinearLayout
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:orientation="horizontal">
+      <EditText
+        android:id="@+id/nameIn"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:textColor="#E6E9EF"
+        android:singleLine="true" />
+      <Button
+        android:id="@+id/saveName"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Save" />
+    </LinearLayout>
+
+    <!-- pairing -->
+    <TextView
+      style="@style/Section"
+      android:text="pairing" />
+    <TextView
+      style="@style/RowTitle"
+      android:text="Relay + code" />
+    <TextView
+      style="@style/RowDesc"
+      android:text="Same WiFi: http://laptop-ip:19877. Paste the code the desktop minted." />
+    <EditText
+      android:id="@+id/relayIn"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:hint="http://192.168.1.5:19877"
+      android:textColor="#E6E9EF"
+      android:textColorHint="#6B7280"
+      android:singleLine="true"
+      android:inputType="textUri" />
+    <LinearLayout
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:orientation="horizontal">
+      <EditText
+        android:id="@+id/codeIn"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:hint="XXXXXXXX"
+        android:textColor="#E6E9EF"
+        android:textColorHint="#6B7280"
+        android:singleLine="true"
+        android:inputType="textCapCharacters" />
+      <Button
+        android:id="@+id/pairBtn"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Pair" />
+    </LinearLayout>
+
+    <!-- agent jobs -->
+    <TextView
+      style="@style/Section"
+      android:text="agent jobs" />
+    <TextView
+      style="@style/RowTitle"
+      android:text="Last job" />
+    <TextView
+      android:id="@+id/lastJob"
+      style="@style/RowDesc"
+      android:text="no jobs yet" />
+
+    <!-- advanced -->
+    <TextView
+      android:id="@+id/advToggle"
+      style="@style/Section"
+      android:text="advanced   relay address, device, diagnostics" />
+    <LinearLayout
+      android:id="@+id/advBox"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:orientation="vertical"
+      android:visibility="gone">
+      <TextView
+        style="@style/RowTitle"
+        android:text="Relay" />
+      <TextView
+        android:id="@+id/advRelay"
+        style="@style/RowDesc"
+        android:text="—" />
+      <TextView
+        style="@style/RowTitle"
+        android:text="Device" />
+      <TextView
+        android:id="@+id/advDevice"
+        style="@style/RowDesc"
+        android:text="—" />
+      <Button
+        android:id="@+id/unpairBtn"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Unpair" />
+      <TextView
+        style="@style/RowTitle"
+        android:text="Log" />
+      <TextView
+        android:id="@+id/logView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#9AA3B2"
+        android:textSize="12sp"
+        android:typeface="monospace" />
+    </LinearLayout>
+
+  </LinearLayout>
+</ScrollView>

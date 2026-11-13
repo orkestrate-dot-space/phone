@@ -5,7 +5,7 @@ const PORT = Number(process.env.PHONE_PORT ?? "19877");
 const DATA_DIR = process.env.PHONE_DATA ?? new URL("../data/", import.meta.url).pathname;
 const DEVICES_FILE = DATA_DIR + "/devices.json";
 
-const CROCKFORD = "ABCDEFGHJKMNPQRSTVWXYZ23456789";
+const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // 32 symbols, no I/L/O/U
 const rand = (n: number) => {
   const b = crypto.getRandomValues(new Uint8Array(n));
   return b;
@@ -98,7 +98,7 @@ const server = Bun.serve({
       return Response.json({ code, expires_in: 600 });
     }
     // Redeem — phone path (LAN ok)
-    const m = u.pathname.match(/^\/pair\/([A-Z2-9]{8})$/);
+    const m = u.pathname.match(/^\/pair\/([A-Z0-9]{8})$/);
     if (m && req.method === "POST") {
       const hit = codes.get(m[1]);
       if (!hit || hit.expires < Date.now()) {
