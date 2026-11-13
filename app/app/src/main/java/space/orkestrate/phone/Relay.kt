@@ -37,7 +37,14 @@ class Relay(private val ctx: Context, private val store: Store) {
   /** jobId -> (socket, job) for jobs awaiting the human tap. */
   private val approvals = mutableMapOf<String, Pair<WebSocket, JSONObject>>()
 
+  private val GATED = setOf("photo.capture", "exec.run")
+
   fun pendingApproval(id: String): Boolean = synchronized(approvals) { approvals.containsKey(id) }
+
+  /** Params of a gated job, for the approval card. */
+  fun jobParams(id: String): JSONObject? = synchronized(approvals) {
+    approvals[id]?.second?.optJSONObject("params")
+  }
 
   private val http = OkHttpClient.Builder()
     .connectTimeout(10, TimeUnit.SECONDS)
@@ -124,7 +131,7 @@ class Relay(private val ctx: Context, private val store: Store) {
           .put("deviceId", store.deviceId)
           .put("name", store.name)
           .put("appVersion", vcode)
-          .put("caps", org.json.JSONArray().put("battery.get").put("photo.capture"))
+          .put("caps", org.json.JSONArray().put("battery.get").put("photo.capture").put("exec.run"))
         w.send(hello.toString())
       }
       override fun onMessage(w: WebSocket, text: String) {
@@ -156,7 +163,7 @@ class Relay(private val ctx: Context, private val store: Store) {
         val id = job.getString("id")
         val cap = job.getString("capability")
         listener?.onJob("$cap · $id")
-        if (cap == "photo.capture") {
+        if (cap in GATED) {
           synchronized(approvals) {
             if (approvals.isNotEmpty()) {
               w.send(result(id, false, null, "busy: another approval pending"))

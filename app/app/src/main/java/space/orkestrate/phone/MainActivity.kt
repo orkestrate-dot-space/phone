@@ -208,10 +208,17 @@ class MainActivity : Activity(), Relay.Listener {
       this, jobId.hashCode(),
       Intent(this, MainActivity::class.java).putExtra("approval", jobId),
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    val (title, text) = if (capability == "exec.run") {
+      "Agent wants to run a command" to (relay.jobParams(jobId)?.optJSONArray("argv")
+        ?.let { a -> (0 until a.length()).joinToString(" ") { a.getString(it) } }
+        ?.take(120) ?: "…")
+    } else {
+      "Agent requests a photo" to "Tap to approve or reject"
+    }
     val n = android.app.Notification.Builder(this, "jobs")
-      .setSmallIcon(android.R.drawable.ic_menu_camera)
-      .setContentTitle("Agent requests a photo")
-      .setContentText("Tap to approve or reject")
+      .setSmallIcon(if (capability == "exec.run") android.R.drawable.ic_menu_manage else android.R.drawable.ic_menu_camera)
+      .setContentTitle(title)
+      .setContentText(text)
       .setContentIntent(open)
       .setAutoCancel(true)
       .build()
@@ -219,6 +226,11 @@ class MainActivity : Activity(), Relay.Listener {
   }
 
   private fun showApproval(jobId: String) {
+    val cap = if (relay.jobParams(jobId)?.has("argv") == true) "exec.run" else "photo.capture"
+    if (cap == "exec.run") showExecApproval(jobId) else showPhotoApproval(jobId)
+  }
+
+  private fun showPhotoApproval(jobId: String) {
     AlertDialog.Builder(this)
       .setTitle("Agent requests a photo")
       .setMessage("Approve opens your camera. The shot goes to the waiting agent. Nothing captures until you take it.")
@@ -228,6 +240,67 @@ class MainActivity : Activity(), Relay.Listener {
       }
       .setOnCancelListener { relay.reject(jobId); cancelNotif(jobId) }
       .show()
+  }
+
+  private fun showExecApproval(jobId: String) {
+    val argv = relay.jobParams(jobId)?.optJSONArray("argv")
+      ?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList()
+    AlertDialog.Builder(this)
+      .setTitle("Agent wants to run a command")
+      .setMessage("Runs as this app (no root). Approve runs exactly:\n\n${argv.joinToString(" ")}")
+      .setPositiveButton("Approve & run") { _, _ -> runExec(jobId, argv) }
+      .setNegativeButton("Reject") { _, _ ->
+        relay.reject(jobId); cancelNotif(jobId); log("rejected $jobId")
+      }
+      .setOnCancelListener { relay.reject(jobId); cancelNotif(jobId) }
+      .show()
+  }
+
+  private val EXEC_ALLOW = setOf("ls", "cat", "echo", "date", "uname", "getprop", "df", "du", "head")
+
+  private fun runExec(jobId: String, argv: List<String>) {
+    Thread {
+      try {
+        val cmd = argv.toMutableList()
+        val bin = cmd[0]
+        if ("/" !in bin) {
+          if (bin !in EXEC_ALLOW) throw IllegalArgumentException("not allowed: $bin")
+          cmd[0] = "/system/bin/$bin"
+        } else {
+          if (!bin.startsWith("/system/bin/")) throw IllegalArgumentException("only /system/bin: $bin")
+        }
+        val timeoutSec = (relay.jobParams(jobId)?.optInt("timeoutSec", 30) ?: 30).coerceIn(5, 120)
+        val proc = ProcessBuilder(cmd).redirectErrorStream(false).start()
+        val out = java.io.ByteArrayOutputStream()
+        val err = java.io.ByteArrayOutputStream()
+        val t1 = Thread { try { proc.inputStream.copyTo(out) } catch (_: Exception) {} }
+        val t2 = Thread { try { proc.errorStream.copyTo(err) } catch (_: Exception) {} }
+        t1.start(); t2.start()
+        val done = proc.waitFor(timeoutSec.toLong(), java.util.concurrent.TimeUnit.SECONDS)
+        t1.join(2000); t2.join(2000)
+        cancelNotif(jobId)
+        if (!done) {
+          proc.destroyForcibly()
+          relay.reject(jobId, "timed out after ${timeoutSec}s")
+          runOnUiThread { log("exec $jobId timed out") }
+          return@Thread
+        }
+        val cap = 65536
+        val so = out.toByteArray(); val se = err.toByteArray()
+        val data = org.json.JSONObject()
+          .put("exit", proc.exitValue())
+          .put("stdout", String(so, 0, minOf(so.size, cap)))
+          .put("stderr", String(se, 0, minOf(se.size, cap)))
+          .put("truncated", so.size > cap || se.size > cap)
+        relay.approve(jobId, data)
+        runOnUiThread { log("exec $jobId exit=${proc.exitValue()}") }
+      } catch (e: Exception) {
+        Log.d("phone", "exec fail: $e")
+        cancelNotif(jobId)
+        relay.reject(jobId, "exec failed: ${e.message}")
+        runOnUiThread { log("exec failed: ${e.message}") }
+      }
+    }.start()
   }
 
   private fun cancelNotif(jobId: String) {

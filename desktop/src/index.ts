@@ -202,6 +202,8 @@ const TOOLS = [
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
   { name: "phone.capture_photo", description: "Ask the human to take a photo (on-glass approval, up to 300s)",
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+  { name: "phone.exec", description: "Run a system command on the phone (on-glass approval every time, app-sandbox limits)",
+    inputSchema: { type: "object", properties: { argv: { type: "array", items: { type: "string" } }, timeoutSec: { type: "number" } }, required: ["argv"], additionalProperties: false } },
   { name: "phone.pair", description: "Mint a pairing code (10 min, single use)",
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
   { name: "phone.pair_list", description: "Paired devices (keys never shown)",
@@ -281,6 +283,16 @@ async function callTool(name: string, params?: any) {
     const dev = [...devices.values()][0]; // queue tolerates offline, hello flushes
     if (!dev) throw new Error("no-device: pair the app and keep it online");
     const data = await sendJob(dev.id, "photo.capture", { maxPx: 1280, quality: 80 }, 300000);
+    return data as Record<string, unknown>;
+  }
+  if (name === "phone.exec") {
+    const dev = [...devices.values()][0];
+    if (!dev) throw new Error("no-device: pair the app and keep it online");
+    const argv = params?.argv;
+    if (!Array.isArray(argv) || argv.length === 0 || argv.some((a: unknown) => typeof a !== "string"))
+      throw new Error("argv must be a non-empty string array");
+    const data = await sendJob(dev.id, "exec.run",
+      { argv, timeoutSec: Math.min(Math.max(params?.timeoutSec ?? 30, 5), 120) }, 300000);
     return data as Record<string, unknown>;
   }
   throw new Error("unknown tool " + name);

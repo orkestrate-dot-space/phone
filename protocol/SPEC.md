@@ -39,15 +39,34 @@ state: queued → delivered → done | failed | expired
 - Timeout default 60s. Unapproved/unanswered → `expired`.
 - Results pruned after 14 days (later; v0 keeps in memory).
 
-## Capabilities (v0)
+## Capabilities
 
-- `battery.get` `{}` → `{"level":61,"charging":true,"voltageMv":3996,"tempC":34.6}`. No approval.
-- `photo.capture` `{"maxPx":1280,"quality":80}` → `{"mime":"image/jpeg","bytes_b64":"..."}`.
-  **Approval-gated**: the app raises a notification + on-screen card; NOTHING
-  captures until the user taps Approve (system camera UI opens, inherently
-  visible). Reject, timeout, or deny → `{"t":"result","ok":false,
-  "error":"rejected"}`. Timeout for this capability: 300s (user needs time
-  to frame the shot), carried in `job.timeoutMs`.
+### `battery.get` (ungated)
+`{}` → `{"level":61,"charging":true,"voltageMv":3996,"tempC":34.6}`.
+
+### `photo.capture` (approval-gated)
+`{"maxPx":1280,"quality":80}` → `{"mime":"image/jpeg","bytes_b64":"..."}`.
+System camera opens; nothing captures before the tap. 300s window.
+
+### `exec.run` (approval-gated) — v14
+`{"argv":["ls","/system/bin"],"timeoutSec":30}` →
+`{"exit":0,"stdout":"...","stderr":"","truncated":false}`.
+
+What the sandbox actually allows (verified against AOSP sepolicy + behavior docs):
+- CAN: run **system binaries** (`/system/bin/*`: toybox applets, `getprop`) and read
+  world-readable state. Pure recon: `ls`, `cat` of readable paths, `date`, `uname`.
+- CANNOT: exec anything from writable dirs (W^X, targetSdk 29+ — no downloaded
+  scripts/tools, no node/python payloads); `dumpsys`/`cmd`/`settings`/`input`
+  (shell-privileged, denied to apps); other apps' data; silent installs.
+- APK-embedded native-lib ELFs are the only shippable binaries (PackageManager
+  extracts `.so` by suffix without content checks). Reserved for later.
+
+Rules: argv-array form only, never `sh -c` interpolation (Mode B shell scripts
+deferred); absolute path or bare name resolved against `/system/bin` + a small
+allowlist (`ls cat echo date uname getprop df du head`); 30s timeout, kill on
+expiry; stdout/stderr capped 64KB each with `truncated` flags. Always-ask in v1
+(every invocation needs the tap); a read-only auto-allowlist is a later policy
+screen. Play would flag remote-driven exec — sideload-only until that story exists.
 
 ## Approval rule (v0 and forever)
 
