@@ -57,6 +57,7 @@ class MainActivity : Activity(), Relay.Listener {
   private var pendingJob: String? = null
   private var pendingMaxPx = 1280
   private var pendingQuality = 80
+  private var lastRelayState = "not paired"
 
   override fun onCreate(b: Bundle?) {
     super.onCreate(b)
@@ -105,9 +106,20 @@ class MainActivity : Activity(), Relay.Listener {
       try { adb.disconnectAll() } catch (_: Exception) {}
       adb.drop()
       ShellPairing.reset()
+      relay.disconnect(); store.clearRelay()
+      stopService(Intent(this, RelayService::class.java))
+      refreshAll(); refreshShellStatus(); log("relay unpaired (shell keys kept)")
+    }
+    findViewById<Button>(R.id.forgetBtn).setOnClickListener {
+      try { adb.disconnectAll() } catch (_: Exception) {}
+      adb.drop()
+      try { java.io.File(filesDir, ".android").deleteRecursively() } catch (_: Exception) {}
+      ShellPairing.reset()
       relay.disconnect(); store.clear()
       stopService(Intent(this, RelayService::class.java))
-      refreshAll(); refreshShellStatus(); log("unpaired")
+      lastJob.text = "no jobs yet"
+      refreshAll(); refreshShellStatus()
+      log("forgot everything — also: Settings → forget pairings, dev options off")
     }
     findViewById<Button>(R.id.updateBtn).setOnClickListener {
       if (updating) { updateNote("already checking…"); return@setOnClickListener }
@@ -182,8 +194,10 @@ class MainActivity : Activity(), Relay.Listener {
 
     // phone://pair?code=XXXXXXXX&relay=http://host:port
     handleDeepLink(intent)
+    lastRelayState = if (store.paired) "connecting…" else "not paired"
     refreshAll()
-    if (store.paired) (application as PhoneApp).ensureService() else onState("not paired")
+    renderHeader()
+    if (store.paired) (application as PhoneApp).ensureService()
     // silent ADB-channel restore (keys persist; toggle may need a manual flip)
     if (store.adbPaired && adb.serial != null) {
       Thread {
@@ -247,9 +261,15 @@ class MainActivity : Activity(), Relay.Listener {
     findViewById<EditText>(R.id.relayEdit).setText(store.relayHttp ?: "")
     advDevice.text = store.deviceId ?: "—"
     pairingBox.visibility = if (store.paired) View.GONE else View.VISIBLE
+    try {
+      val pkg = packageManager.getPackageInfo(packageName, 0)
+      val vc = if (android.os.Build.VERSION.SDK_INT >= 28) pkg.longVersionCode else @Suppress("DEPRECATION") pkg.versionCode.toLong()
+      findViewById<TextView>(R.id.buildInfo).text = "build $vc · ${pkg.versionName}"
+    } catch (_: Exception) {}
     refreshBgStatus()
     refreshAutoStatus()
-    if (!store.paired) { onState("not paired"); lastJob.text = "no jobs yet" }
+    if (!store.paired) lastJob.text = "no jobs yet"
+    renderHeader()
   }
 
   private fun refreshBgStatus() {
@@ -313,6 +333,7 @@ class MainActivity : Activity(), Relay.Listener {
         findViewById<TextView>(R.id.shellStatus).text = "paired — connecting…"
       }
     }
+    renderHeader()
   }
 
   /** Grant ourselves WRITE_SECURE_SETTINGS through our own shell (one-time). */
@@ -727,8 +748,21 @@ class MainActivity : Activity(), Relay.Listener {
 
   // ---- Relay.Listener ----
   override fun onState(s: String) = runOnUiThread {
-    status.text = s
-    dot.setBackgroundColor(if (s.startsWith("connected")) 0xFF34D399.toInt() else 0xFF6B7280.toInt())
+    lastRelayState = s
+    renderHeader()
+  }
+
+  /** One header, both links: relay state + shell state, never one masquerading as the other. */
+  private fun renderHeader() {
+    val relayLive = lastRelayState.startsWith("connected")
+    val shellLive = adb.serial != null
+    dot.setBackgroundColor(if (relayLive || shellLive) 0xFF34D399.toInt() else 0xFF6B7280.toInt())
+    status.text = when {
+      relayLive && shellLive -> "connected — relay + shell"
+      relayLive -> "connected — relay (shell off)"
+      shellLive -> "shell live — relay ${lastRelayState}"
+      else -> lastRelayState
+    }
   }
 
   override fun onJob(desc: String) = runOnUiThread { lastJob.text = desc }

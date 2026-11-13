@@ -84,12 +84,12 @@
       android:text="Relay + code" />
     <TextView
       style="@style/RowDesc"
-      android:text="Same WiFi: http://laptop-ip:19877. Paste the code the desktop minted." />
+      android:text="Paste the relay address + the code the desktop minted (MCP phone.pair)." />
     <EditText
       android:id="@+id/relayIn"
       android:layout_width="match_parent"
       android:layout_height="wrap_content"
-      android:hint="http://192.168.1.5:19877"
+      android:hint="https://….opentunnel.xyz or http://laptop-ip:19877"
       android:textColor="#E6E9EF"
       android:textColorHint="#6B7280"
       android:singleLine="true"
@@ -173,11 +173,21 @@
         android:id="@+id/advDevice"
         style="@style/RowDesc"
         android:text="—" />
-      <Button
-        android:id="@+id/unpairBtn"
-        android:layout_width="wrap_content"
+      <LinearLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Unpair" />
+        android:orientation="horizontal">
+        <Button
+          android:id="@+id/unpairBtn"
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:text="Unpair" />
+        <Button
+          android:id="@+id/forgetBtn"
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:text="Forget everything" />
+      </LinearLayout>
       <TextView
         style="@style/RowTitle"
         android:text="Background" />
@@ -243,9 +253,13 @@
         style="@style/RowTitle"
         android:text="Updates" />
       <TextView
+        android:id="@+id/buildInfo"
+        style="@style/RowDesc"
+        android:text="—" />
+      <TextView
         android:id="@+id/updateStatus"
         style="@style/RowDesc"
-        android:text="v0.17.14 · no check yet" />
+        android:text="v0.17.15 · no check yet" />
       <TextView
         android:id="@+id/selfUpdateStatus"
         style="@style/RowDesc"
