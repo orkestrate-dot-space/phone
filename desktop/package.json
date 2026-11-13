@@ -1,0 +1,10 @@
+{
+  "name": "@orkestrate/phone-relay",
+  "version": "0.1.0",
+  "description": "phone MCP + embedded relay (v0 core)",
+  "type": "module",
+  "scripts": {
+    "start": "bun src/index.ts",
+    "serve": "bun src/index.ts --serve"
+  }
+}
