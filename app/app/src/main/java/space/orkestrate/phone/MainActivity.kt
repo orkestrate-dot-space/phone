@@ -104,6 +104,7 @@ class MainActivity : Activity(), Relay.Listener {
     findViewById<Button>(R.id.unpairBtn).setOnClickListener {
       try { adb.disconnectAll() } catch (_: Exception) {}
       adb.drop()
+      ShellPairing.reset()
       relay.disconnect(); store.clear()
       stopService(Intent(this, RelayService::class.java))
       refreshAll(); refreshShellStatus(); log("unpaired")
@@ -173,7 +174,8 @@ class MainActivity : Activity(), Relay.Listener {
       if (pairPort == null || code.isBlank()) { shellNote("pair port + code from Settings"); return@setOnClickListener }
       shellNote("pairing…")
       Thread {
-        val ok = adb.pair("127.0.0.1", pairPort, code)
+        val host = adb.lanIp() ?: "127.0.0.1"
+        val ok = adb.pair(host, pairPort, code)
         runOnUiThread {
           if (!ok) { shellNote("pair failed — check code/port"); return@runOnUiThread }
           store.adbPaired = true

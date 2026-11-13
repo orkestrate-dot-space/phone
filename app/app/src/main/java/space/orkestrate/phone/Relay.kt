@@ -86,15 +86,20 @@ class Relay(private val ctx: Context, private val store: Store) {
     Thread {
       var wait = 1000L
       while (wantUp) {
+        val t0 = android.os.SystemClock.elapsedRealtime()
         try {
           listener?.onState("connecting…")
           dial()
-          wait = 1000L // dial() blocks until the socket dies
+          // Only reset the backoff for a connection that actually lived:
+          // fast post-handshake closes (dead route, tunnel flap) must NOT
+          // reset it, or redial hammers every second forever.
+          if (android.os.SystemClock.elapsedRealtime() - t0 > 30000) wait = 1000L
         } catch (e: Exception) {
           Log.d("phone", "dial: $e")
           listener?.onLog("dial: ${e.message}")
         }
         if (!wantUp) break
+        Log.d("phone", "redial in ${wait}ms")
         listener?.onState("retry in ${wait / 1000}s")
         Thread.sleep(wait)
         wait = minOf(wait * 2, 30000L)

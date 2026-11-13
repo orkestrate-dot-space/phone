@@ -21,7 +21,13 @@ object ShellPairing {
   const val KEY_CODE = "code"
   const val NOTIF_ID = 2
 
+  @Volatile private var prompted = false
+
+  fun reset() { prompted = false }
+
   fun prompt(ctx: Context) {
+    if (prompted) return
+    prompted = true
     val nm = ctx.getSystemService(NotificationManager::class.java)
     nm.createNotificationChannel(NotificationChannel("shell", "shell setup", NotificationManager.IMPORTANCE_HIGH))
     val pi = PendingIntent.getBroadcast(
@@ -85,7 +91,9 @@ class ShellPairReceiver : BroadcastReceiver() {
           ShellPairing.note(ctx, "no pair dialog found — open it in Settings first", done = true)
           return@Thread
         }
-        if (!adb.pair("127.0.0.1", pairPort, code)) {
+        // pair to the LAN address shown in the dialog (loopback is flaky on some builds)
+        val host = adb.lanIp() ?: "127.0.0.1"
+        if (!adb.pair(host, pairPort, code)) {
           ShellPairing.note(ctx, "pair failed — check the code", done = true)
           return@Thread
         }

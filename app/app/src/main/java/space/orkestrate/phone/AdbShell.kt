@@ -208,6 +208,13 @@ class AdbShell(private val ctx: Context) {
     }
   }
 
+  fun lanIp(): String? = try {
+    java.net.NetworkInterface.getNetworkInterfaces().toList()
+      .flatMap { it.inetAddresses.toList() }
+      .firstOrNull { !it.isLoopbackAddress && it is java.net.Inet4Address }
+      ?.hostAddress
+  } catch (_: Exception) { null }
+
   fun isWirelessOn(): Boolean = try {
     android.provider.Settings.Global.getInt(
       ctx.contentResolver, "adb_wifi_enabled", 0) == 1
