@@ -109,7 +109,14 @@ class MainActivity : Activity(), Relay.Listener {
         startActivity(Intent(
           android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
           android.net.Uri.parse("package:$packageName")))
-      } catch (e: Exception) { log("battery prompt failed: ${e.message}") }
+      } catch (e: Exception) {
+        log("battery prompt failed: ${e.message}")
+        try {
+          startActivity(Intent(
+            android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            android.net.Uri.parse("package:$packageName")))
+        } catch (e2: Exception) { log("settings failed: ${e2.message}") }
+      }
     }
     findViewById<Button>(R.id.relaySave).setOnClickListener {
       val r = findViewById<EditText>(R.id.relayEdit).text.toString().trim()
@@ -160,7 +167,22 @@ class MainActivity : Activity(), Relay.Listener {
     findViewById<EditText>(R.id.relayEdit).setText(store.relayHttp ?: "")
     advDevice.text = store.deviceId ?: "—"
     pairingBox.visibility = if (store.paired) View.GONE else View.VISIBLE
+    refreshBgStatus()
     if (!store.paired) { onState("not paired"); lastJob.text = "no jobs yet" }
+  }
+
+  private fun refreshBgStatus() {
+    val pm = getSystemService(android.os.PowerManager::class.java)
+    val exempt = pm.isIgnoringBatteryOptimizations(packageName)
+    findViewById<TextView>(R.id.bgStatus).text =
+      if (exempt) "unrestricted ✓ — link survives the screen off"
+      else "restricted — tap Allow background"
+  }
+
+  override fun onResume() {
+    super.onResume()
+    relay.listener = this
+    refreshAll()
   }
 
   private fun refreshIdentity() {

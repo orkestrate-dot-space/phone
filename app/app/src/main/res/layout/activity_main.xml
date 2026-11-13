@@ -184,6 +184,10 @@
       <TextView
         style="@style/RowDesc"
         android:text="Keep the link alive with the screen off. One system prompt." />
+      <TextView
+        android:id="@+id/bgStatus"
+        style="@style/RowDesc"
+        android:text="checking…" />
       <Button
         android:id="@+id/bgBtn"
         android:layout_width="wrap_content"
@@ -205,7 +209,7 @@
       <TextView
         android:id="@+id/updateStatus"
         style="@style/RowDesc"
-        android:text="v0.10.0 · no check yet" />
+        android:text="v0.11.0 · no check yet" />
       <Button
         android:id="@+id/updateBtn"
         android:layout_width="wrap_content"
