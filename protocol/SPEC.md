@@ -42,7 +42,19 @@ state: queued → delivered → done | failed | expired
 ## Capabilities (v0)
 
 - `battery.get` `{}` → `{"level":61,"charging":true,"voltageMv":3996,"tempC":34.6}`. No approval.
-- Future (gated): `photo.capture`, `sms.otp`, `location.get` — each needs on-glass tap, `approved:false` result otherwise.
+- `photo.capture` `{"maxPx":1280,"quality":80}` → `{"mime":"image/jpeg","bytes_b64":"..."}`.
+  **Approval-gated**: the app raises a notification + on-screen card; NOTHING
+  captures until the user taps Approve (system camera UI opens, inherently
+  visible). Reject, timeout, or deny → `{"t":"result","ok":false,
+  "error":"rejected"}`. Timeout for this capability: 300s (user needs time
+  to frame the shot), carried in `job.timeoutMs`.
+
+## Approval rule (v0 and forever)
+
+No API call — from the agent, the relay, or anyone holding the device key —
+can fake an approval. A job that requires approval completes only after a
+real on-glass tap. Same guarantee as Browse's handoff (only a real click
+continues it).
 
 ## MCP surface (v0)
 

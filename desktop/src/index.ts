@@ -177,6 +177,8 @@ const TOOLS = [
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
   { name: "phone.battery", description: "Read the phone battery via the companion app",
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+  { name: "phone.capture_photo", description: "Ask the human to take a photo (on-glass approval, up to 300s)",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false } },
   { name: "phone.pair", description: "Mint a pairing code (10 min, single use)",
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
 ];
@@ -199,6 +201,12 @@ async function callTool(name: string) {
     const dev = [...devices.values()].find(d => online(d.id));
     if (!dev) throw new Error("no-device: pair the app and keep it online");
     const data = await sendJob(dev.id, "battery.get", {});
+    return data as Record<string, unknown>;
+  }
+  if (name === "phone.capture_photo") {
+    const dev = [...devices.values()].find(d => online(d.id));
+    if (!dev) throw new Error("no-device: pair the app and keep it online");
+    const data = await sendJob(dev.id, "photo.capture", { maxPx: 1280, quality: 80 }, 300000);
     return data as Record<string, unknown>;
   }
   throw new Error("unknown tool " + name);

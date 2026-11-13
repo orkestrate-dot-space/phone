@@ -71,6 +71,11 @@
     </LinearLayout>
 
     <!-- pairing -->
+    <LinearLayout
+      android:id="@+id/pairingBox"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:orientation="vertical">
     <TextView
       style="@style/Section"
       android:text="pairing" />
@@ -108,6 +113,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="Pair" />
+    </LinearLayout>
     </LinearLayout>
 
     <!-- agent jobs -->

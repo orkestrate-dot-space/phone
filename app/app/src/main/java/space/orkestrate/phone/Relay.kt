@@ -11,11 +11,14 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
  * v0 relay client: pairs once, holds one WS, executes jobs.
  * Transport rule (SPEC): the phone always dials out; the relay never calls in.
+ * Approval rule (SPEC): gated capabilities complete only after a real
+ * on-glass tap. No code path auto-approves — ever.
  */
 class Relay(private val ctx: Context, private val store: Store) {
 
@@ -23,11 +26,18 @@ class Relay(private val ctx: Context, private val store: Store) {
     fun onState(s: String)
     fun onJob(desc: String)
     fun onLog(s: String)
+    /** Gated job arrived. Show card/notification; call exactly one of approve/reject. */
+    fun onApproval(jobId: String, capability: String)
   }
 
   var listener: Listener? = null
   @Volatile private var ws: WebSocket? = null
   @Volatile private var wantUp = false
+
+  /** jobId -> (socket, job) for jobs awaiting the human tap. */
+  private val approvals = mutableMapOf<String, Pair<WebSocket, JSONObject>>()
+
+  fun pendingApproval(id: String): Boolean = synchronized(approvals) { approvals.containsKey(id) }
 
   private val http = OkHttpClient.Builder()
     .connectTimeout(10, TimeUnit.SECONDS)
@@ -73,6 +83,7 @@ class Relay(private val ctx: Context, private val store: Store) {
           dial()
           wait = 1000L // dial() blocks until the socket dies
         } catch (e: Exception) {
+          Log.d("phone", "dial: $e")
           listener?.onLog("dial: ${e.message}")
         }
         if (!wantUp) break
@@ -98,14 +109,14 @@ class Relay(private val ctx: Context, private val store: Store) {
       .url(wsUrl)
       .header("Authorization", "Bearer $token")
       .build()
-    val gone = java.util.concurrent.CountDownLatch(1)
+    val gone = CountDownLatch(1)
     val socket = http.newWebSocket(req, object : WebSocketListener() {
       override fun onOpen(w: WebSocket, r: Response) {
         val hello = JSONObject()
           .put("t", "hello")
           .put("deviceId", store.deviceId)
           .put("name", store.name)
-          .put("caps", org.json.JSONArray().put("battery.get"))
+          .put("caps", org.json.JSONArray().put("battery.get").put("photo.capture"))
         w.send(hello.toString())
       }
       override fun onMessage(w: WebSocket, text: String) {
@@ -137,34 +148,62 @@ class Relay(private val ctx: Context, private val store: Store) {
         val id = job.getString("id")
         val cap = job.getString("capability")
         listener?.onJob("$cap · $id")
-        Thread {
+        if (cap == "photo.capture") {
+          synchronized(approvals) {
+            if (approvals.isNotEmpty()) {
+              w.send(result(id, false, null, "busy: another approval pending"))
+              return
+            }
+            approvals[id] = w to job
+          }
+          Log.d("phone", "approval needed: $id")
+          listener?.onApproval(id, cap)
+        } else Thread {
           try {
-            val data = exec(cap)
-            w.send(JSONObject().put("t", "result").put("id", id)
-              .put("ok", true).put("data", data).toString())
+            w.send(result(id, true, exec(job), null))
           } catch (e: Exception) {
-            w.send(JSONObject().put("t", "result").put("id", id)
-              .put("ok", false).put("error", e.message ?: "failed").toString())
+            w.send(result(id, false, null, e.message ?: "failed"))
           }
         }.start()
       }
     }
   }
 
-  // ---- capability executor (v0: battery only) ----
-  private fun exec(capability: String): JSONObject {
-    if (capability == "battery.get") {
-      val b = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-      val level = b?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-      val scale = b?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
-      val status = b?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-      return JSONObject()
-        .put("level", if (level >= 0) (level * 100 / scale) else -1)
-        .put("charging", status == BatteryManager.BATTERY_STATUS_CHARGING ||
-          status == BatteryManager.BATTERY_STATUS_FULL)
-        .put("voltageMv", b?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1) ?: -1)
-        .put("tempC", ((b?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1)) / 10.0)
+  private fun result(id: String, ok: Boolean, data: JSONObject?, err: String?): String =
+    JSONObject().put("t", "result").put("id", id).put("ok", ok)
+      .apply { if (ok && data != null) put("data", data) else put("error", err ?: "failed") }
+      .toString()
+
+  /** Human tapped Approve with captured data. Only path that completes a gated job. */
+  fun approve(id: String, data: JSONObject) {
+    val (w, _) = synchronized(approvals) { approvals.remove(id) } ?: return
+    Log.d("phone", "approved by tap: $id")
+    w.send(result(id, true, data, null))
+  }
+
+  /** Human tapped Reject (or the flow aborted). Only other path that ends a gated job. */
+  fun reject(id: String, why: String = "rejected") {
+    val (w, _) = synchronized(approvals) { approvals.remove(id) } ?: return
+    Log.d("phone", "rejected by tap: $id ($why)")
+    w.send(result(id, false, null, why))
+  }
+
+  // ---- capability executor (ungated only) ----
+  private fun exec(job: JSONObject): JSONObject {
+    when (job.getString("capability")) {
+      "battery.get" -> {
+        val b = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val level = b?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = b?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+        val status = b?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+        return JSONObject()
+          .put("level", if (level >= 0) (level * 100 / scale) else -1)
+          .put("charging", status == BatteryManager.BATTERY_STATUS_CHARGING ||
+            status == BatteryManager.BATTERY_STATUS_FULL)
+          .put("voltageMv", b?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1) ?: -1)
+          .put("tempC", ((b?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1)) / 10.0)
+      }
     }
-    throw IllegalArgumentException("unknown-capability: $capability")
+    throw IllegalArgumentException("unknown-capability: ${job.getString("capability")}")
   }
 }

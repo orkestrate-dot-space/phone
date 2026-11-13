@@ -1,18 +1,35 @@
 package space.orkestrate.phone
 
+import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.ContentValues
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
+import android.util.Base64
+import android.util.Log
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import java.io.ByteArrayOutputStream
 
 /**
  * v0 shell: status header, name, pairing, last job, collapsed advanced.
- * Visual language mirrors the browse-extension settings ref (single dark card,
- * lowercase section labels, control right) — nothing more.
+ * Plus the approval surface: notification + dialog + system camera.
+ * Visual language mirrors the browse-extension settings ref (single dark
+ * card, lowercase section labels, control right) — nothing more.
  */
 class MainActivity : Activity(), Relay.Listener {
 
@@ -25,12 +42,18 @@ class MainActivity : Activity(), Relay.Listener {
   private lateinit var nameIn: EditText
   private lateinit var relayIn: EditText
   private lateinit var codeIn: EditText
+  private lateinit var pairingBox: LinearLayout
   private lateinit var lastJob: TextView
   private lateinit var advBox: LinearLayout
   private lateinit var advRelay: TextView
   private lateinit var advDevice: TextView
   private lateinit var logView: TextView
   private val logLines = ArrayDeque<String>()
+
+  private var pendingShot: Uri? = null
+  private var pendingJob: String? = null
+  private var pendingMaxPx = 1280
+  private var pendingQuality = 80
 
   override fun onCreate(b: Bundle?) {
     super.onCreate(b)
@@ -45,6 +68,7 @@ class MainActivity : Activity(), Relay.Listener {
     nameIn = findViewById(R.id.nameIn)
     relayIn = findViewById(R.id.relayIn)
     codeIn = findViewById(R.id.codeIn)
+    pairingBox = findViewById(R.id.pairingBox)
     lastJob = findViewById(R.id.lastJob)
     advBox = findViewById(R.id.advBox)
     advRelay = findViewById(R.id.advRelay)
@@ -65,7 +89,7 @@ class MainActivity : Activity(), Relay.Listener {
       relay.pair(r, c) { ok, msg ->
         runOnUiThread {
           log(msg)
-          if (ok) { refreshAll(); relay.connect() }
+          if (ok) { codeIn.setText(""); refreshAll(); relay.connect() }
         }
       }
     }
@@ -80,20 +104,32 @@ class MainActivity : Activity(), Relay.Listener {
     handleDeepLink(intent)
     refreshAll()
     if (store.paired) relay.connect() else onState("not paired")
+
+    // opened from the approval notification?
+    intent.getStringExtra("approval")?.let { id ->
+      if (relay.pendingApproval(id)) showApproval(id)
+      else log("approval $id already settled")
+    }
   }
 
-  override fun onNewIntent(i: Intent) { super.onNewIntent(i); handleDeepLink(i) }
+  override fun onNewIntent(i: Intent) {
+    super.onNewIntent(i)
+    handleDeepLink(i)
+    i.getStringExtra("approval")?.let { id ->
+      if (relay.pendingApproval(id)) showApproval(id)
+    }
+  }
 
   private fun handleDeepLink(i: Intent?) {
     val d = i?.data ?: return
-    android.util.Log.d("phone", "deep link: $d")
+    Log.d("phone", "deep link: $d")
     if (d.scheme != "phone" || d.host != "pair") return
     val code = d.getQueryParameter("code") ?: return
     val r = d.getQueryParameter("relay") ?: return
     relayIn.setText(r); codeIn.setText(code)
     log("deep link → pairing…")
     relay.pair(r, code) { ok, msg ->
-      runOnUiThread { log(msg); if (ok) { refreshAll(); relay.connect() } }
+      runOnUiThread { log(msg); if (ok) { codeIn.setText(""); refreshAll(); relay.connect() } }
     }
   }
 
@@ -101,11 +137,138 @@ class MainActivity : Activity(), Relay.Listener {
     refreshIdentity()
     advRelay.text = store.relayHttp ?: "—"
     advDevice.text = store.deviceId ?: "—"
+    pairingBox.visibility = if (store.paired) View.GONE else View.VISIBLE
     if (!store.paired) { onState("not paired"); lastJob.text = "no jobs yet" }
   }
 
   private fun refreshIdentity() {
     identity.text = "${store.name} is how agents call this phone."
+  }
+
+  // ---- approval surface ----
+  override fun onApproval(jobId: String, capability: String) {
+    runOnUiThread {
+      notifyApproval(jobId, capability)
+      showApproval(jobId)
+    }
+  }
+
+  private fun notifyApproval(jobId: String, capability: String) {
+    if (Build.VERSION.SDK_INT >= 33 &&
+      checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+      requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 41)
+    }
+    val nm = getSystemService(NotificationManager::class.java)
+    nm.createNotificationChannel(NotificationChannel("jobs", "agent jobs", NotificationManager.IMPORTANCE_HIGH))
+    val open = PendingIntent.getActivity(
+      this, jobId.hashCode(),
+      Intent(this, MainActivity::class.java).putExtra("approval", jobId),
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    val n = android.app.Notification.Builder(this, "jobs")
+      .setSmallIcon(android.R.drawable.ic_menu_camera)
+      .setContentTitle("Agent requests a photo")
+      .setContentText("Tap to approve or reject")
+      .setContentIntent(open)
+      .setAutoCancel(true)
+      .build()
+    nm.notify(jobId.hashCode(), n)
+  }
+
+  private fun showApproval(jobId: String) {
+    AlertDialog.Builder(this)
+      .setTitle("Agent requests a photo")
+      .setMessage("Approve opens your camera. The shot goes to the waiting agent. Nothing captures until you take it.")
+      .setPositiveButton("Approve") { _, _ -> startShot(jobId) }
+      .setNegativeButton("Reject") { _, _ ->
+        relay.reject(jobId); cancelNotif(jobId); log("rejected $jobId")
+      }
+      .setOnCancelListener { relay.reject(jobId); cancelNotif(jobId) }
+      .show()
+  }
+
+  private fun cancelNotif(jobId: String) {
+    getSystemService(NotificationManager::class.java).cancel(jobId.hashCode())
+  }
+
+  private fun startShot(jobId: String) {
+    if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+      pendingJob = jobId
+      requestPermissions(arrayOf(Manifest.permission.CAMERA), 42)
+      return
+    }
+    launchCamera(jobId)
+  }
+
+  override fun onRequestPermissionsResult(rc: Int, perms: Array<out String>, res: IntArray) {
+    if (rc == 42) {
+      val id = pendingJob ?: return
+      pendingJob = null
+      if (res.firstOrNull() == PackageManager.PERMISSION_GRANTED) launchCamera(id)
+      else { relay.reject(id, "camera denied"); cancelNotif(id); log("camera denied") }
+    }
+  }
+
+  private fun launchCamera(jobId: String) {
+    pendingMaxPx = 1280; pendingQuality = 80
+    val values = ContentValues().apply {
+      put(MediaStore.Images.Media.DISPLAY_NAME, "phone_${System.currentTimeMillis()}.jpg")
+      put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+      put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/phone")
+    }
+    val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+    if (uri == null) { relay.reject(jobId, "camera store failed"); cancelNotif(jobId); return }
+    pendingShot = uri; pendingJob = jobId
+    val cam = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+      .putExtra(MediaStore.EXTRA_OUTPUT, uri)
+      .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+    val resolved = packageManager.queryIntentActivities(cam, PackageManager.MATCH_DEFAULT_ONLY)
+    if (resolved.isEmpty()) { relay.reject(jobId, "no camera app"); cancelNotif(jobId); return }
+    startActivityForResult(cam, 43)
+  }
+
+  @Deprecated("framework activity result")
+  override fun onActivityResult(rc: Int, resultCode: Int, data: Intent?) {
+    super.onActivityResult(rc, resultCode, data)
+    if (rc != 43) return
+    val id = pendingJob ?: return
+    val uri = pendingShot
+    pendingJob = null; pendingShot = null
+    cancelNotif(id)
+    if (resultCode != RESULT_OK || uri == null) {
+      relay.reject(id, "shot cancelled"); log("shot cancelled"); return
+    }
+    try {
+      val dataOut = downscale(uri, pendingMaxPx, pendingQuality)
+      relay.approve(id, org.json.JSONObject()
+        .put("mime", "image/jpeg").put("bytes_b64", dataOut))
+      log("approved $id (${dataOut.length / 1024} KB b64)")
+    } catch (e: Exception) {
+      Log.d("phone", "shot fail: $e")
+      relay.reject(id, "shot failed: ${e.message}"); log("shot failed")
+    }
+  }
+
+  private fun downscale(uri: Uri, maxPx: Int, quality: Int): String {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    contentResolver.openInputStream(uri)!!.use { BitmapFactory.decodeStream(it, null, bounds) }
+    var sample = 1
+    while (bounds.outWidth / sample > maxPx || bounds.outHeight / sample > maxPx) sample *= 2
+    val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+    var bmp = contentResolver.openInputStream(uri)!!.use { BitmapFactory.decodeStream(it, null, opts) }
+      ?: throw IllegalStateException("decode failed")
+    // exact scale to fit maxPx
+    val scale = minOf(1f, maxPx / maxOf(bmp.width, bmp.height).toFloat())
+    if (scale < 1f) {
+      val w = (bmp.width * scale).toInt(); val h = (bmp.height * scale).toInt()
+      val s = Bitmap.createScaledBitmap(bmp, w, h, true)
+      if (s !== bmp) bmp.recycle()
+      bmp = s
+    }
+    val out = ByteArrayOutputStream()
+    bmp.compress(Bitmap.CompressFormat.JPEG, quality, out)
+    bmp.recycle()
+    contentResolver.delete(uri, null, null) // keep the glass clean; bytes already flow to the agent
+    return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
   }
 
   // ---- Relay.Listener ----
