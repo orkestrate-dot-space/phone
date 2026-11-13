@@ -335,23 +335,30 @@ class MainActivity : Activity(), Relay.Listener {
     super.onResume()
     relay.listener = this
     refreshAll()
-    // guided shell setup: wireless on → discover ports, user types only the code
-    if (store.adbSerial == null && adb.isWirelessOn()) {
-      ShellPairing.prompt(this)
-      shellNote("wireless on — finding ports…")
-      adb.discover { connect, pair ->
+    // continuous port watch while the shell isn't up: dialogs fill fields live
+    if (adb.serial == null) {
+      if (adb.isWirelessOn()) ShellPairing.prompt(this)
+      adb.watchPorts { connect, pair ->
         runOnUiThread {
           if (connect.isNotEmpty() && findViewById<EditText>(R.id.shellPort).text.isBlank())
             findViewById<EditText>(R.id.shellPort).setText(connect.first().toString())
-          if (pair.isNotEmpty() && findViewById<EditText>(R.id.shellPairPort).text.isBlank())
-            findViewById<EditText>(R.id.shellPairPort).setText(pair.first().toString())
-          if (!store.adbPaired) shellNote("2 · type the 6-digit code into the notification, or below")
-          else refreshShellStatus()
+          if (pair.isNotEmpty()) {
+            store.adbPairPort = pair.first()
+            if (findViewById<EditText>(R.id.shellPairPort).text.isBlank())
+              findViewById<EditText>(R.id.shellPairPort).setText(pair.first().toString())
+          }
+          if (!store.adbPaired && adb.isWirelessOn())
+            shellNote("pair dialog open? type its 6-digit code below (or in the notification)")
         }
       }
-    } else if (store.adbSerial != null) {
+    } else {
       ShellPairing.clear(this)
     }
+  }
+
+  override fun onPause() {
+    adb.unwatch()
+    super.onPause()
   }
 
   private fun refreshIdentity() {
@@ -432,7 +439,8 @@ class MainActivity : Activity(), Relay.Listener {
       .show()
   }
 
-  private val EXEC_ALLOW = setOf("ls", "cat", "echo", "date", "uname", "getprop", "df", "du", "head")
+  /** Executor allowlist (app-UID tier). logcat: own-UID logs only, diagnostics. */
+  private val EXEC_ALLOW = setOf("ls", "cat", "echo", "date", "uname", "getprop", "df", "du", "head", "logcat")
   /** Shell tier: the full adb-shell surface (still argv-array, still approved). */
   private val SHELL_ALLOW = EXEC_ALLOW + setOf(
     "dumpsys", "cmd", "pm", "settings", "input", "logcat", "am", "wm",

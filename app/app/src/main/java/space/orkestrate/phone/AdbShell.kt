@@ -114,7 +114,62 @@ class AdbShell(private val ctx: Context) {
       "device not found" in t || "no route to host" in t
   }
 
-  /** mDNS scan for the on-device wireless-debugging ports. ~10s. */
+  /** Continuous mDNS watch for wireless-debugging ports. Live-updates as the
+   *  Settings dialogs open/close. Caller must call [unwatch] (e.g. onPause). */
+  private var watchListeners = mutableListOf<NsdManager.DiscoveryListener>()
+
+  fun watchPorts(onUpdate: (connect: List<Int>, pair: List<Int>) -> Unit) {
+    unwatch()
+    try {
+      val nsd = ctx.getSystemService(NsdManager::class.java) ?: run {
+        onUpdate(emptyList(), emptyList()); return
+      }
+      val connectPorts = mutableSetOf<Int>()
+      val pairPorts = mutableSetOf<Int>()
+      val mkListener = { sink: MutableSet<Int> ->
+        object : NsdManager.DiscoveryListener {
+          override fun onStartDiscoveryFailed(s: String?, e: Int) {}
+          override fun onStopDiscoveryFailed(s: String?, e: Int) {}
+          override fun onDiscoveryStarted(s: String?) {}
+          override fun onDiscoveryStopped(s: String?) {}
+          override fun onServiceFound(info: NsdServiceInfo) {
+            try {
+              nsd.resolveService(info, object : NsdManager.ResolveListener {
+                override fun onResolveFailed(i: NsdServiceInfo?, e: Int) {}
+                override fun onServiceResolved(i: NsdServiceInfo) {
+                  if (i.port > 0) {
+                    val added = synchronized(sink) { sink.add(i.port) }
+                    if (added) onUpdate(
+                      synchronized(connectPorts) { connectPorts.toList().sorted() },
+                      synchronized(pairPorts) { pairPorts.toList().sorted() })
+                  }
+                }
+              })
+            } catch (_: Exception) {}
+          }
+          override fun onServiceLost(info: NsdServiceInfo) {}
+        }
+      }
+      val cL = mkListener(connectPorts)
+      val pL = mkListener(pairPorts)
+      watchListeners.add(cL); watchListeners.add(pL)
+      nsd.discoverServices("_adb-tls-connect._tcp", NsdManager.PROTOCOL_DNS_SD, cL)
+      nsd.discoverServices("_adb-tls-pairing._tcp", NsdManager.PROTOCOL_DNS_SD, pL)
+    } catch (e: Exception) {
+      Log.d("phone", "nsd watch fail: $e")
+      onUpdate(emptyList(), emptyList())
+    }
+  }
+
+  fun unwatch() {
+    try {
+      val nsd = ctx.getSystemService(NsdManager::class.java)
+      for (l in watchListeners) { try { nsd?.stopServiceDiscovery(l) } catch (_: Exception) {} }
+    } catch (_: Exception) {}
+    watchListeners.clear()
+  }
+
+  /** One-shot mDNS scan (~10s). Kept for background flows without a lifecycle. */
   fun discover(cb: (connect: List<Int>, pair: List<Int>) -> Unit) {
     try {
       val nsd = ctx.getSystemService(NsdManager::class.java) ?: run { cb(emptyList(), emptyList()); return }

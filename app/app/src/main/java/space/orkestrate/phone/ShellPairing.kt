@@ -68,23 +68,27 @@ class ShellPairReceiver : BroadcastReceiver() {
       try {
         ShellPairing.note(ctx, "pairing…")
         val adb = AdbShell(ctx)
-        var pairPort: Int? = null
-        val latch = java.util.concurrent.CountDownLatch(1)
-        adb.discover { _, pair ->
-          pairPort = pair.firstOrNull()
-          latch.countDown()
-        }
-        latch.await(15, java.util.concurrent.TimeUnit.SECONDS)
-        val pp = pairPort
+        val store = Store(ctx)
+        // cached port first (dialog may have closed after the code was read),
+        // fresh discovery only if we have nothing cached
+        var pp: Int? = store.adbPairPort.takeIf { it > 0 }
         if (pp == null) {
+          val latch = java.util.concurrent.CountDownLatch(1)
+          adb.discover { _, pair ->
+            pair.firstOrNull()?.let { store.adbPairPort = it }
+            pp = store.adbPairPort.takeIf { it > 0 }
+            latch.countDown()
+          }
+          latch.await(15, java.util.concurrent.TimeUnit.SECONDS)
+        }
+        val pairPort: Int = pp ?: run {
           ShellPairing.note(ctx, "no pair dialog found — open it in Settings first", done = true)
           return@Thread
         }
-        if (!adb.pair("127.0.0.1", pp, code)) {
+        if (!adb.pair("127.0.0.1", pairPort, code)) {
           ShellPairing.note(ctx, "pair failed — check the code", done = true)
           return@Thread
         }
-        val store = Store(ctx)
         store.adbPaired = true
         val latch2 = java.util.concurrent.CountDownLatch(1)
         var connectPort: Int? = null

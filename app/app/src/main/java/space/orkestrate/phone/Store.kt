@@ -23,6 +23,10 @@ class Store(ctx: Context) {
     get() = p.getBoolean("adbPaired", false)
     set(v) = p.edit().putBoolean("adbPaired", v).apply()
 
+  var adbPairPort: Int
+    get() = p.getInt("adbPairPort", 0)
+    set(v) = p.edit().putInt("adbPairPort", v).apply()
+
   val paired: Boolean get() = deviceId != null && token != null && relayHttp != null
 
   fun clear() = p.edit().remove("relayHttp").remove("deviceId").remove("token")
