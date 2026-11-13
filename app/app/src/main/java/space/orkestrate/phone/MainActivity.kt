@@ -8,6 +8,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.ContentValues
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -99,6 +100,7 @@ class MainActivity : Activity(), Relay.Listener {
     findViewById<Button>(R.id.unpairBtn).setOnClickListener {
       relay.disconnect(); store.clear(); refreshAll(); log("unpaired")
     }
+    findViewById<Button>(R.id.updateBtn).setOnClickListener { checkUpdate() }
 
     // phone://pair?code=XXXXXXXX&relay=http://host:port
     handleDeepLink(intent)
@@ -269,6 +271,86 @@ class MainActivity : Activity(), Relay.Listener {
     bmp.recycle()
     contentResolver.delete(uri, null, null) // keep the glass clean; bytes already flow to the agent
     return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+  }
+
+  // ---- self-update: version check + PackageInstaller session ----
+  private fun checkUpdate() {
+    val base = store.relayHttp ?: run { updateNote("not paired"); return }
+    val token = store.token ?: run { updateNote("not paired"); return }
+    updateNote("checking…")
+    Thread {
+      try {
+        val client = okhttp3.OkHttpClient()
+        val req = okhttp3.Request.Builder()
+          .url(base.trimEnd('/') + "/app/version")
+          .header("Authorization", "Bearer $token")
+          .build()
+        client.newCall(req).execute().use { res ->
+          val body = res.body?.string() ?: ""
+          if (!res.isSuccessful) { updateNote("check failed: ${res.code}"); return@Thread }
+          val v = org.json.JSONObject(body)
+          val latest = v.getInt("versionCode")
+          val mine = packageManager.getPackageInfo(packageName, 0).let {
+            if (android.os.Build.VERSION.SDK_INT >= 28) it.longVersionCode.toInt() else @Suppress("DEPRECATION") it.versionCode
+          }
+          if (latest <= mine) { updateNote("up to date (${v.optString("versionName")})"); return@Thread }
+          updateNote("downloading ${v.optString("versionName")}…")
+          downloadAndInstall(client, base, token)
+        }
+      } catch (e: Exception) {
+        Log.d("phone", "update fail: $e")
+        updateNote("check failed: ${e.message}")
+      }
+    }.start()
+  }
+
+  private fun updateNote(s: String) = runOnUiThread {
+    findViewById<TextView>(R.id.updateStatus).text = s
+    log("update: $s")
+  }
+
+  private fun downloadAndInstall(client: okhttp3.OkHttpClient, base: String, token: String) {
+    try {
+      val req = okhttp3.Request.Builder()
+        .url(base.trimEnd('/') + "/app.apk")
+        .header("Authorization", "Bearer $token")
+        .build()
+      val tmp = java.io.File(cacheDir, "update.apk")
+      client.newCall(req).execute().use { res ->
+        if (!res.isSuccessful) { updateNote("download: ${res.code}"); return }
+        res.body!!.byteStream().use { input ->
+          tmp.outputStream().use { input.copyTo(it) }
+        }
+      }
+      updateNote("downloaded ${(tmp.length() / 1024)} KB, installing…")
+      registerReceiver(object : android.content.BroadcastReceiver() {
+        override fun onReceive(c: android.content.Context?, i: Intent?) {
+          val st = i?.getIntExtra(android.content.pm.PackageInstaller.EXTRA_STATUS, -999)
+          updateNote("install status=$st ${i?.getStringExtra(android.content.pm.PackageInstaller.EXTRA_STATUS_MESSAGE) ?: ""}")
+        }
+      }, IntentFilter("space.orkestrate.phone.UPDATE_STATUS"))
+      val pi = packageManager.packageInstaller
+      val params = android.content.pm.PackageInstaller.SessionParams(
+        android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+      val id = pi.createSession(params)
+      pi.openSession(id).use { session ->
+        tmp.inputStream().use { input ->
+          session.openWrite("app", 0, tmp.length()).use { out ->
+            input.copyTo(out)
+            session.fsync(out)
+          }
+        }
+        val intent = PendingIntent.getBroadcast(
+          this, id, Intent("space.orkestrate.phone.UPDATE_STATUS"),
+          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        session.commit(intent.intentSender)
+      }
+      tmp.delete()
+      // system shows the install prompt; result lands in the broadcast above
+    } catch (e: Exception) {
+      Log.d("phone", "install fail: $e")
+      updateNote("install failed: ${e.message}")
+    }
   }
 
   // ---- Relay.Listener ----

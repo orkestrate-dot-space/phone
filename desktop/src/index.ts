@@ -4,6 +4,7 @@
 const PORT = Number(process.env.PHONE_PORT ?? "19877");
 const DATA_DIR = process.env.PHONE_DATA ?? new URL("../data/", import.meta.url).pathname;
 const DEVICES_FILE = DATA_DIR + "/devices.json";
+const DIST_DIR = process.env.PHONE_DIST ?? new URL("../../dist/", import.meta.url).pathname;
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // 32 symbols, no I/L/O/U
 const rand = (n: number) => {
@@ -115,6 +116,24 @@ const server = Bun.serve({
       const wsBase = `ws://${u.host}/device`;
       log(`paired ${id} (${d.name})`);
       return Response.json({ deviceId: id, token, relay: wsBase });
+    }
+    // ---- self-update channel: version + APK, device-token authed ----
+    if (u.pathname === "/app/version" || u.pathname === "/app.apk") {
+      const auth = req.headers.get("authorization") ?? "";
+      const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+      if (!byToken.has(token)) return new Response("unauthorized", { status: 401 });
+      try {
+        if (u.pathname === "/app/version") {
+          const v = await Bun.file(DIST_DIR + "/version.json").json();
+          return Response.json(v);
+        }
+        const apk = Bun.file(DIST_DIR + "/app.apk");
+        if (!(await apk.exists())) return new Response("no build published", { status: 404 });
+        return new Response(apk as any, { headers: {
+          "content-type": "application/vnd.android.package-archive",
+          "content-length": String(apk.size),
+        }});
+      } catch { return new Response("dist not published", { status: 404 }); }
     }
     // WS upgrade
     if (u.pathname === "/device") {

@@ -168,6 +168,18 @@
         android:textColor="#9AA3B2"
         android:textSize="12sp"
         android:typeface="monospace" />
+      <TextView
+        style="@style/RowTitle"
+        android:text="Updates" />
+      <TextView
+        android:id="@+id/updateStatus"
+        style="@style/RowDesc"
+        android:text="v0.3.0 · no check yet" />
+      <Button
+        android:id="@+id/updateBtn"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Check update" />
     </LinearLayout>
 
   </LinearLayout>
