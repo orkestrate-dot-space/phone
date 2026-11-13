@@ -337,6 +337,7 @@ class MainActivity : Activity(), Relay.Listener {
     refreshAll()
     // guided shell setup: wireless on → discover ports, user types only the code
     if (store.adbSerial == null && adb.isWirelessOn()) {
+      ShellPairing.prompt(this)
       shellNote("wireless on — finding ports…")
       adb.discover { connect, pair ->
         runOnUiThread {
@@ -344,10 +345,12 @@ class MainActivity : Activity(), Relay.Listener {
             findViewById<EditText>(R.id.shellPort).setText(connect.first().toString())
           if (pair.isNotEmpty() && findViewById<EditText>(R.id.shellPairPort).text.isBlank())
             findViewById<EditText>(R.id.shellPairPort).setText(pair.first().toString())
-          if (!store.adbPaired) shellNote("2 · enter the pairing code from Settings, tap Pair")
+          if (!store.adbPaired) shellNote("2 · type the 6-digit code into the notification, or below")
           else refreshShellStatus()
         }
       }
+    } else if (store.adbSerial != null) {
+      ShellPairing.clear(this)
     }
   }
 

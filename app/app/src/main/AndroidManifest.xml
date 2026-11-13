@@ -31,6 +31,14 @@
       </intent-filter>
     </receiver>
 
+    <receiver
+      android:name=".ShellPairReceiver"
+      android:exported="false">
+      <intent-filter>
+        <action android:name="space.orkestrate.phone.SHELL_PAIR_REPLY" />
+      </intent-filter>
+    </receiver>
+
     <activity
       android:name=".MainActivity"
       android:exported="true"
