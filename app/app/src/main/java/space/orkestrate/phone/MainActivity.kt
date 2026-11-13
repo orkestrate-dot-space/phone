@@ -346,9 +346,13 @@ class MainActivity : Activity(), Relay.Listener {
             session.fsync(out)
           }
         }
+        val piFlags = if (android.os.Build.VERSION.SDK_INT >= 31) {
+          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+        } else {
+          PendingIntent.FLAG_UPDATE_CURRENT
+        }
         val intent = PendingIntent.getBroadcast(
-          this, id, Intent("space.orkestrate.phone.UPDATE_STATUS"),
-          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+          this, id, Intent("space.orkestrate.phone.UPDATE_STATUS"), piFlags)
         session.commit(intent.intentSender)
       }
       tmp.delete()
