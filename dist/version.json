@@ -1,1 +1,1 @@
-{"versionCode":25,"versionName":"0.17.8","notes":"instant pairing: always-on port cache, no-spam notification"}
+{"versionCode":26,"versionName":"0.17.9","notes":"extract native adb server at install"}

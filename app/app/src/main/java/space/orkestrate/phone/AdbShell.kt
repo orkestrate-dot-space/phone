@@ -32,6 +32,9 @@ class AdbShell(private val ctx: Context) {
   fun setSerial(s: String?) { serial = s }
   fun drop() { serial = null }
 
+  /** The bundled adb server must be extracted at install time. */
+  fun serverPresent(): Boolean = try { java.io.File(adbPath).canExecute() } catch (_: Exception) { false }
+
   private fun base(): ProcessBuilder = ProcessBuilder()
     .directory(ctx.filesDir)
     .apply {

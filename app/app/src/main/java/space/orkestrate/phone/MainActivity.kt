@@ -266,6 +266,11 @@ class MainActivity : Activity(), Relay.Listener {
         ShellPairing.clear(this)
         findViewById<TextView>(R.id.shellStatus).text = "connected — ${adb.serial} (shell-UID)"
       }
+      !adb.serverPresent() -> {
+        settingsBtn.visibility = View.GONE
+        findViewById<TextView>(R.id.shellStatus).text =
+          "server binary missing — reinstall the app (update once more)"
+      }
       !devOn -> {
         settingsBtn.visibility = View.VISIBLE
         settingsBtn.text = "0 · Enable developer options"

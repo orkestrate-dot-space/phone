@@ -245,7 +245,7 @@
       <TextView
         android:id="@+id/updateStatus"
         style="@style/RowDesc"
-        android:text="v0.17.8 · no check yet" />
+        android:text="v0.17.9 · no check yet" />
       <ProgressBar
         android:id="@+id/updateProgress"
         style="?android:attr/progressBarStyleHorizontal"
