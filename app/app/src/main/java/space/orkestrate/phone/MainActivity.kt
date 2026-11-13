@@ -128,14 +128,22 @@ class MainActivity : Activity(), Relay.Listener {
       refreshAutoStatus()
       log("auto-approve ${if (store.autoApprove) "ON" else "OFF"}")
     }
+    findViewById<Button>(R.id.shellSettings).setOnClickListener {
+      try {
+        startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+      } catch (e: Exception) { shellNote("open Developer options manually") }
+    }
     findViewById<Button>(R.id.shellScan).setOnClickListener {
       shellNote("scanning…")
-      adb.scanPorts { ports ->
+      adb.discover { connect, pair ->
         runOnUiThread {
-          if (ports.isNotEmpty()) {
-            findViewById<EditText>(R.id.shellPort).setText(ports.first().toString())
-            shellNote("found: ${ports.joinToString(", ")}")
-          } else shellNote("nothing found — is wireless debugging on?")
+          if (connect.isNotEmpty())
+            findViewById<EditText>(R.id.shellPort).setText(connect.first().toString())
+          if (pair.isNotEmpty())
+            findViewById<EditText>(R.id.shellPairPort).setText(pair.first().toString())
+          shellNote(if (connect.isEmpty() && pair.isEmpty())
+            "nothing found — is wireless debugging on?"
+          else "found connect=${connect.joinToString(",")} pair=${pair.joinToString(",")}")
         }
       }
     }
@@ -163,9 +171,9 @@ class MainActivity : Activity(), Relay.Listener {
           if (!ok) { shellNote("pair failed — check code/port"); return@runOnUiThread }
           store.adbPaired = true
           shellNote("paired — scanning for connect port…")
-          adb.scanPorts { ports ->
+          adb.discover { connect, _ ->
             runOnUiThread {
-              val port = ports.firstOrNull()
+              val port = connect.firstOrNull()
               if (port == null) { shellNote("paired — enter connect port manually"); refreshShellStatus(); return@runOnUiThread }
               findViewById<EditText>(R.id.shellPort).setText(port.toString())
               Thread {
@@ -291,6 +299,20 @@ class MainActivity : Activity(), Relay.Listener {
     super.onResume()
     relay.listener = this
     refreshAll()
+    // guided shell setup: wireless on → discover ports, user types only the code
+    if (store.adbSerial == null && adb.isWirelessOn()) {
+      shellNote("wireless on — finding ports…")
+      adb.discover { connect, pair ->
+        runOnUiThread {
+          if (connect.isNotEmpty() && findViewById<EditText>(R.id.shellPort).text.isBlank())
+            findViewById<EditText>(R.id.shellPort).setText(connect.first().toString())
+          if (pair.isNotEmpty() && findViewById<EditText>(R.id.shellPairPort).text.isBlank())
+            findViewById<EditText>(R.id.shellPairPort).setText(pair.first().toString())
+          if (!store.adbPaired) shellNote("2 · enter the pairing code from Settings, tap Pair")
+          else refreshShellStatus()
+        }
+      }
+    }
   }
 
   private fun refreshIdentity() {

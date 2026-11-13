@@ -224,6 +224,11 @@
         android:id="@+id/shellStatus"
         style="@style/RowDesc"
         android:text="checking…" />
+      <Button
+        android:id="@+id/shellSettings"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="1 · Open wireless settings" />
       <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -295,7 +300,7 @@
       <TextView
         android:id="@+id/updateStatus"
         style="@style/RowDesc"
-        android:text="v0.16.0 · no check yet" />
+        android:text="v0.17.0 · no check yet" />
       <Button
         android:id="@+id/updateBtn"
         android:layout_width="wrap_content"

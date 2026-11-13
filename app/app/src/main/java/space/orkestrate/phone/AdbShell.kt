@@ -114,37 +114,49 @@ class AdbShell(private val ctx: Context) {
       "device not found" in t || "no route to host" in t
   }
 
-  /** mDNS scan for the on-device wireless-debugging connect port. ~10s. */
-  fun scanPorts(cb: (List<Int>) -> Unit) {
+  /** mDNS scan for the on-device wireless-debugging ports. ~10s. */
+  fun discover(cb: (connect: List<Int>, pair: List<Int>) -> Unit) {
     try {
-      val nsd = ctx.getSystemService(NsdManager::class.java) ?: run { cb(emptyList()); return }
-      val found = mutableSetOf<Int>()
-      val listener = object : NsdManager.DiscoveryListener {
-        override fun onStartDiscoveryFailed(s: String?, e: Int) {}
-        override fun onStopDiscoveryFailed(s: String?, e: Int) {}
-        override fun onDiscoveryStarted(s: String?) {}
-        override fun onDiscoveryStopped(s: String?) {}
-        override fun onServiceFound(info: NsdServiceInfo) {
-          nsd.resolveService(info, object : NsdManager.ResolveListener {
-            override fun onResolveFailed(i: NsdServiceInfo?, e: Int) {}
-            override fun onServiceResolved(i: NsdServiceInfo) {
-              if (i.port > 0) synchronized(found) { found.add(i.port) }
-            }
-          })
+      val nsd = ctx.getSystemService(NsdManager::class.java) ?: run { cb(emptyList(), emptyList()); return }
+      val connectPorts = mutableSetOf<Int>()
+      val pairPorts = mutableSetOf<Int>()
+      val mkListener = { sink: MutableSet<Int> ->
+        object : NsdManager.DiscoveryListener {
+          override fun onStartDiscoveryFailed(s: String?, e: Int) {}
+          override fun onStopDiscoveryFailed(s: String?, e: Int) {}
+          override fun onDiscoveryStarted(s: String?) {}
+          override fun onDiscoveryStopped(s: String?) {}
+          override fun onServiceFound(info: NsdServiceInfo) {
+            nsd.resolveService(info, object : NsdManager.ResolveListener {
+              override fun onResolveFailed(i: NsdServiceInfo?, e: Int) {}
+              override fun onServiceResolved(i: NsdServiceInfo) {
+                if (i.port > 0) synchronized(sink) { sink.add(i.port) }
+              }
+            })
+          }
+          override fun onServiceLost(info: NsdServiceInfo) {}
         }
-        override fun onServiceLost(info: NsdServiceInfo) {}
       }
-      nsd.discoverServices("_adb-tls-connect._tcp", NsdManager.PROTOCOL_DNS_SD, listener)
+      val cL = mkListener(connectPorts)
+      val pL = mkListener(pairPorts)
+      nsd.discoverServices("_adb-tls-connect._tcp", NsdManager.PROTOCOL_DNS_SD, cL)
+      nsd.discoverServices("_adb-tls-pairing._tcp", NsdManager.PROTOCOL_DNS_SD, pL)
       Thread {
         Thread.sleep(10000)
-        try { nsd.stopServiceDiscovery(listener) } catch (_: Exception) {}
-        cb(found.toList().sorted())
+        try { nsd.stopServiceDiscovery(cL) } catch (_: Exception) {}
+        try { nsd.stopServiceDiscovery(pL) } catch (_: Exception) {}
+        cb(connectPorts.toList().sorted(), pairPorts.toList().sorted())
       }.start()
     } catch (e: Exception) {
       Log.d("phone", "nsd fail: $e")
-      cb(emptyList())
+      cb(emptyList(), emptyList())
     }
   }
+
+  fun isWirelessOn(): Boolean = try {
+    android.provider.Settings.Global.getInt(
+      ctx.contentResolver, "adb_wifi_enabled", 0) == 1
+  } catch (_: Exception) { false }
 
   /** Best-effort reconnect using the stored serial (keys persist, toggle may not). */
   fun reconnectStored(): Boolean {
