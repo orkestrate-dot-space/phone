@@ -101,6 +101,15 @@ class MainActivity : Activity(), Relay.Listener {
       relay.disconnect(); store.clear(); refreshAll(); log("unpaired")
     }
     findViewById<Button>(R.id.updateBtn).setOnClickListener { checkUpdate() }
+    findViewById<Button>(R.id.relaySave).setOnClickListener {
+      val r = findViewById<EditText>(R.id.relayEdit).text.toString().trim()
+      if (r.isBlank()) { log("relay address empty"); return@setOnClickListener }
+      relay.disconnect()
+      store.relayHttp = r.trimEnd('/')
+      refreshAll()
+      log("relay → ${store.relayHttp}")
+      relay.connect()
+    }
 
     // phone://pair?code=XXXXXXXX&relay=http://host:port
     handleDeepLink(intent)
@@ -138,6 +147,7 @@ class MainActivity : Activity(), Relay.Listener {
   private fun refreshAll() {
     refreshIdentity()
     advRelay.text = store.relayHttp ?: "—"
+    findViewById<EditText>(R.id.relayEdit).setText(store.relayHttp ?: "")
     advDevice.text = store.deviceId ?: "—"
     pairingBox.visibility = if (store.paired) View.GONE else View.VISIBLE
     if (!store.paired) { onState("not paired"); lastJob.text = "no jobs yet" }

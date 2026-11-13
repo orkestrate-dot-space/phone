@@ -146,6 +146,26 @@
         android:id="@+id/advRelay"
         style="@style/RowDesc"
         android:text="—" />
+      <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+        <EditText
+          android:id="@+id/relayEdit"
+          android:layout_width="0dp"
+          android:layout_height="wrap_content"
+          android:layout_weight="1"
+          android:textColor="#E6E9EF"
+          android:textColorHint="#6B7280"
+          android:hint="https://… or http://laptop-ip:19877"
+          android:singleLine="true"
+          android:inputType="textUri" />
+        <Button
+          android:id="@+id/relaySave"
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:text="Use" />
+      </LinearLayout>
       <TextView
         style="@style/RowTitle"
         android:text="Device" />
@@ -174,7 +194,7 @@
       <TextView
         android:id="@+id/updateStatus"
         style="@style/RowDesc"
-        android:text="v0.8.0 · no check yet" />
+        android:text="v0.9.0 · no check yet" />
       <Button
         android:id="@+id/updateBtn"
         android:layout_width="wrap_content"

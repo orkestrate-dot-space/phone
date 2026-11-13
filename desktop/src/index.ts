@@ -73,11 +73,7 @@ function sendJob(deviceId: string, capability: string, params: Record<string, un
   });
 }
 
-// ---- HTTP+WS relay ----
-function isLoopback(req: Request, server: any) {
-  const ip = server?.requestIP(req)?.address ?? "";
-  return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
-}
+// ---- relay: HTTP (redeem, app channel) + WS (device channel) ----
 
 const server = Bun.serve({
   port: PORT,
@@ -88,16 +84,10 @@ const server = Bun.serve({
       return Response.json({ ok: true, devices: devices.size,
         online: [...sockets.keys()] });
     }
-    // Mint pairing code — loopback only
-    if (u.pathname === "/pair" && req.method === "POST") {
-      if (!isLoopback(req, srv)) return new Response("loopback only", { status: 403 });
-      if ([...codes.values()].filter(c => c.expires > Date.now()).length >= 5)
-        return Response.json({ error: "too many pending codes" }, { status: 429 });
-      const code = makeCode();
-      codes.set(code, { code, expires: Date.now() + 10 * 60 * 1000 });
-      log("minted pairing code, expires in 10m");
-      return Response.json({ code, expires_in: 600 });
-    }
+    // NOTE: no HTTP mint endpoint. Codes are minted only via the MCP
+    // phone.pair tool (loopback stdin, never the network): through a tunnel
+    // every visitor looks loopback, so no HTTP endpoint may mean "local".
+    // Redeem (below) is safe to expose: 40-bit code + 5-strike voiding.
     // Redeem — phone path (LAN ok)
     const m = u.pathname.match(/^\/pair\/([A-Z0-9]{8})$/);
     if (m && req.method === "POST") {
