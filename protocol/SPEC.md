@@ -68,6 +68,12 @@ expiry; stdout/stderr capped 64KB each with `truncated` flags. Always-ask in v1
 (every invocation needs the tap); a read-only auto-allowlist is a later policy
 screen. Play would flag remote-driven exec — sideload-only until that story exists.
 
+Empirical boundary (SM-M176B, Android 16, Samsung — live runs):
+- `getprop ro.build.version.release` → exit 0, `16`. Execution + stdout path proven.
+- `ls /system/bin` → exit 1, `Permission denied`. Even dir listing is Knox-hardened.
+- Verdict: recon-grade shell (props, `date`, `uname`, readable files), not a
+  terminal. System introspection (`dumpsys` etc.) stays shell-privileged.
+
 ## Approval rule (v0 and forever)
 
 No API call — from the agent, the relay, or anyone holding the device key —
