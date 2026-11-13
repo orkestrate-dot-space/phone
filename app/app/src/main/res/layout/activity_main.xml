@@ -174,7 +174,7 @@
       <TextView
         android:id="@+id/updateStatus"
         style="@style/RowDesc"
-        android:text="v0.6.0 · no check yet" />
+        android:text="v0.8.0 · no check yet" />
       <Button
         android:id="@+id/updateBtn"
         android:layout_width="wrap_content"

@@ -328,6 +328,21 @@ class MainActivity : Activity(), Relay.Listener {
         override fun onReceive(c: android.content.Context?, i: Intent?) {
           val st = i?.getIntExtra(android.content.pm.PackageInstaller.EXTRA_STATUS, -999)
           updateNote("install status=$st ${i?.getStringExtra(android.content.pm.PackageInstaller.EXTRA_STATUS_MESSAGE) ?: ""}")
+          if (st == android.content.pm.PackageInstaller.STATUS_PENDING_USER_ACTION) {
+            val confirm = if (android.os.Build.VERSION.SDK_INT >= 33) {
+              i?.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+            } else {
+              @Suppress("DEPRECATION") i?.getParcelableExtra(Intent.EXTRA_INTENT)
+            }
+            try {
+              confirm?.let { startActivity(it) } ?: updateNote("installer UI missing")
+            } catch (e: Exception) { updateNote("installer UI failed: ${e.message}") }
+          } else if (st != null && st != android.content.pm.PackageInstaller.STATUS_SUCCESS) {
+            try { unregisterReceiver(this) } catch (_: Exception) {}
+          } else if (st == android.content.pm.PackageInstaller.STATUS_SUCCESS) {
+            updateNote("installed — reopen the app")
+            try { unregisterReceiver(this) } catch (_: Exception) {}
+          }
         }
       }
       if (android.os.Build.VERSION.SDK_INT >= 33) {
@@ -351,8 +366,12 @@ class MainActivity : Activity(), Relay.Listener {
         } else {
           PendingIntent.FLAG_UPDATE_CURRENT
         }
-        val intent = PendingIntent.getBroadcast(
-          this, id, Intent("space.orkestrate.phone.UPDATE_STATUS"), piFlags)
+        // Explicit intent (setPackage): Android 14+ throws on MUTABLE + implicit.
+        // Mutable: PackageInstaller writes EXTRA_STATUS back (immutable rejected on 35+).
+        val statusIntent = Intent("space.orkestrate.phone.UPDATE_STATUS").apply {
+          setPackage(packageName)
+        }
+        val intent = PendingIntent.getBroadcast(this, id, statusIntent, piFlags)
         session.commit(intent.intentSender)
       }
       tmp.delete()
