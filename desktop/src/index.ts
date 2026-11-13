@@ -51,13 +51,16 @@ async function save() {
 type Waiter = { resolve: (v: unknown) => void; reject: (e: Error) => void;
   timer: Timer; cap: string; deviceId: string; job: Record<string, unknown> };
 const waiting = new Map<string, Waiter>(); // by job id, queued or delivered
+const delivered = new Set<string>(); // job ids already pushed down the socket
 const sockets = new Map<string, any>(); // deviceId -> ws
 const online = (id: string) => sockets.has(id);
 
 function deliver(deviceId: string, w: Waiter) {
+  const id = (w.job as any).id as string;
+  if (delivered.has(id)) return true; // already down the wire; don't double-post
   const ws = sockets.get(deviceId);
   if (!ws) return false;
-  try { ws.send(JSON.stringify({ t: "job", job: w.job })); return true; }
+  try { ws.send(JSON.stringify({ t: "job", job: w.job })); delivered.add(id); return true; }
   catch { return false; }
 }
 
@@ -66,7 +69,7 @@ function sendJob(deviceId: string, capability: string, params: Record<string, un
   const job = { id, capability, params, timeoutMs };
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      waiting.delete(id);
+      waiting.delete(id); delivered.delete(id);
       reject(new Error("timeout waiting for phone"));
     }, timeoutMs);
     const w: Waiter = { resolve, reject, timer, cap: capability, deviceId, job };
@@ -173,7 +176,7 @@ const server = Bun.serve({
       if (msg.t === "result") {
         const p = waiting.get(msg.id);
         if (!p) return;
-        clearTimeout(p.timer); waiting.delete(msg.id);
+        clearTimeout(p.timer); waiting.delete(msg.id); delivered.delete(msg.id);
         if (msg.ok) p.resolve(msg.data ?? {});
         else p.reject(new Error(String(msg.error ?? "phone failed")));
         return;
@@ -240,7 +243,7 @@ async function callTool(name: string, params?: any) {
     try { sockets.get(id)?.close(4403, "revoked"); } catch {}
     sockets.delete(id);
     for (const [jid, w] of waiting) {
-      if (w.deviceId === id) { clearTimeout(w.timer); waiting.delete(jid);
+      if (w.deviceId === id) { clearTimeout(w.timer); waiting.delete(jid); delivered.delete(jid);
         w.reject(new Error("device revoked")); }
     }
     await save();

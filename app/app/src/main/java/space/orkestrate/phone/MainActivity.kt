@@ -202,6 +202,12 @@ class MainActivity : Activity(), Relay.Listener {
       if (relay.pendingApproval(id)) showApproval(id, capabilityOf(id))
       else log("approval $id already settled")
     }
+    // one-time notification permission ask (approval cards live in the shade)
+    if (android.os.Build.VERSION.SDK_INT >= 33 &&
+      checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+        android.content.pm.PackageManager.PERMISSION_GRANTED) {
+      requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 41)
+    }
   }
 
   override fun onNewIntent(i: Intent) {

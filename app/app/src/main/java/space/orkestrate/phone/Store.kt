@@ -32,7 +32,7 @@ class Store(ctx: Context) {
     set(v) = p.edit().putInt("adbConnectPort", v).apply()
 
   var allowSelfUpdate: Boolean
-    get() = p.getBoolean("allowSelfUpdate", false)
+    get() = p.getBoolean("allowSelfUpdate", true)
     set(v) = p.edit().putBoolean("allowSelfUpdate", v).apply()
 
   val paired: Boolean get() = deviceId != null && token != null && relayHttp != null
