@@ -23,6 +23,7 @@ import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import java.io.ByteArrayOutputStream
 
@@ -109,7 +110,12 @@ class MainActivity : Activity(), Relay.Listener {
       stopService(Intent(this, RelayService::class.java))
       refreshAll(); refreshShellStatus(); log("unpaired")
     }
-    findViewById<Button>(R.id.updateBtn).setOnClickListener { checkUpdate() }
+    findViewById<Button>(R.id.updateBtn).setOnClickListener {
+      if (updating) { updateNote("already checking…"); return@setOnClickListener }
+      updating = true
+      findViewById<Button>(R.id.updateBtn).isEnabled = false
+      checkUpdate()
+    }
     findViewById<Button>(R.id.bgBtn).setOnClickListener {
       try {
         startActivity(Intent(
@@ -563,30 +569,46 @@ class MainActivity : Activity(), Relay.Listener {
     return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
   }
 
+  @Volatile private var updating = false
+
   // ---- self-update: version check + PackageInstaller session ----
   private fun checkUpdate() {
-    val base = store.relayHttp ?: run { updateNote("not paired"); return }
-    val token = store.token ?: run { updateNote("not paired"); return }
+    val base = store.relayHttp ?: run { updateDone("not paired"); return }
+    val token = store.token ?: run { updateDone("not paired"); return }
     updateNote("checking…")
     Thread {
-      val client = okhttp3.OkHttpClient.Builder()
-        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-        .build()
-      var lastErr = "unknown"
-      for (attempt in 1..3) {
-        try {
-          if (tryUpdate(client, base, token)) return@Thread
-          else return@Thread // definitive answer (up to date), no retry
-        } catch (e: Exception) {
-          lastErr = e.message ?: "failed"
-          Log.d("phone", "update attempt $attempt: $e")
-          updateNote("retrying… ($attempt/3)")
-          Thread.sleep(2000)
+      try {
+        val client = okhttp3.OkHttpClient.Builder()
+          .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+          .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+          .build()
+        var lastErr = "unknown"
+        for (attempt in 1..3) {
+          try {
+            if (tryUpdate(client, base, token)) return@Thread
+            else return@Thread // definitive answer (up to date), no retry
+          } catch (e: Exception) {
+            lastErr = e.message ?: "failed"
+            Log.d("phone", "update attempt $attempt: $e")
+            updateNote("retrying… ($attempt/3)")
+            Thread.sleep(2000)
+          }
+        }
+        updateNote("check failed: $lastErr")
+      } finally {
+        runOnUiThread {
+          updating = false
+          findViewById<Button>(R.id.updateBtn)?.isEnabled = true
+          findViewById<ProgressBar>(R.id.updateProgress)?.visibility = View.GONE
         }
       }
-      updateNote("check failed: $lastErr")
     }.start()
+  }
+
+  private fun updateDone(s: String) {
+    updateNote(s)
+    updating = false
+    findViewById<Button>(R.id.updateBtn)?.isEnabled = true
   }
 
   /** Returns true if an update flow completed; false if already up to date. Throws on transport failure. */
@@ -625,8 +647,38 @@ class MainActivity : Activity(), Relay.Listener {
     val tmp = java.io.File(cacheDir, "update.apk")
     client.newCall(req).execute().use { res ->
       if (!res.isSuccessful) { updateNote("download: ${res.code}"); return null }
+      val total = res.body!!.contentLength()
+      runOnUiThread {
+        findViewById<ProgressBar>(R.id.updateProgress)?.apply {
+          visibility = View.VISIBLE; max = 100; progress = 0
+        }
+      }
+      var done = 0L
+      var lastPct = -1
       res.body!!.byteStream().use { input ->
-        tmp.outputStream().use { input.copyTo(it) }
+        tmp.outputStream().use { out ->
+          val buf = ByteArray(32 * 1024)
+          while (true) {
+            val n = input.read(buf)
+            if (n < 0) break
+            out.write(buf, 0, n)
+            done += n
+            if (total > 0) {
+              val pct = (done * 100 / total).toInt()
+              if (pct != lastPct) {
+                lastPct = pct
+                runOnUiThread {
+                  findViewById<ProgressBar>(R.id.updateProgress)?.progress = pct
+                }
+              }
+            }
+          }
+        }
+      }
+      runOnUiThread {
+        findViewById<ProgressBar>(R.id.updateProgress)?.visibility =
+          if (total > 0) View.GONE else View.VISIBLE
+        if (total <= 0) findViewById<ProgressBar>(R.id.updateProgress)?.isIndeterminate = true
       }
     }
     return tmp
