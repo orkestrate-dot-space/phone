@@ -42,6 +42,7 @@ class Relay(private val ctx: Context, private val store: Store) {
   private val http = OkHttpClient.Builder()
     .connectTimeout(10, TimeUnit.SECONDS)
     .readTimeout(0, TimeUnit.MILLISECONDS) // long-lived WS
+    .pingInterval(20, TimeUnit.SECONDS) // WS-protocol keepalive: survives carrier NAT timeouts
     .build()
 
   // ---- pairing: POST {relay}/pair/{code} -> {deviceId, token} ----

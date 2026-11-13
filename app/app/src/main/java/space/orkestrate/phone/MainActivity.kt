@@ -321,29 +321,45 @@ class MainActivity : Activity(), Relay.Listener {
     val token = store.token ?: run { updateNote("not paired"); return }
     updateNote("checking…")
     Thread {
-      try {
-        val client = okhttp3.OkHttpClient()
-        val req = okhttp3.Request.Builder()
-          .url(base.trimEnd('/') + "/app/version")
-          .header("Authorization", "Bearer $token")
-          .build()
-        client.newCall(req).execute().use { res ->
-          val body = res.body?.string() ?: ""
-          if (!res.isSuccessful) { updateNote("check failed: ${res.code}"); return@Thread }
-          val v = org.json.JSONObject(body)
-          val latest = v.getInt("versionCode")
-          val mine = packageManager.getPackageInfo(packageName, 0).let {
-            if (android.os.Build.VERSION.SDK_INT >= 28) it.longVersionCode.toInt() else @Suppress("DEPRECATION") it.versionCode
-          }
-          if (latest <= mine) { updateNote("up to date (${v.optString("versionName")})"); return@Thread }
-          updateNote("downloading ${v.optString("versionName")}…")
-          downloadAndInstall(client, base, token)
+      val client = okhttp3.OkHttpClient.Builder()
+        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+      var lastErr = "unknown"
+      for (attempt in 1..3) {
+        try {
+          if (tryUpdate(client, base, token)) return@Thread
+          else return@Thread // definitive answer (up to date), no retry
+        } catch (e: Exception) {
+          lastErr = e.message ?: "failed"
+          Log.d("phone", "update attempt $attempt: $e")
+          updateNote("retrying… ($attempt/3)")
+          Thread.sleep(2000)
         }
-      } catch (e: Exception) {
-        Log.d("phone", "update fail: $e")
-        updateNote("check failed: ${e.message}")
       }
+      updateNote("check failed: $lastErr")
     }.start()
+  }
+
+  /** Returns true if an update flow completed; false if already up to date. Throws on transport failure. */
+  private fun tryUpdate(client: okhttp3.OkHttpClient, base: String, token: String): Boolean {
+      val req = okhttp3.Request.Builder()
+        .url(base.trimEnd('/') + "/app/version")
+        .header("Authorization", "Bearer $token")
+        .build()
+      client.newCall(req).execute().use { res ->
+        val body = res.body?.string() ?: ""
+        if (!res.isSuccessful) { updateNote("check failed: ${res.code}"); return false }
+        val v = org.json.JSONObject(body)
+        val latest = v.getInt("versionCode")
+        val mine = packageManager.getPackageInfo(packageName, 0).let {
+          if (android.os.Build.VERSION.SDK_INT >= 28) it.longVersionCode.toInt() else @Suppress("DEPRECATION") it.versionCode
+        }
+        if (latest <= mine) { updateNote("up to date (${v.optString("versionName")})"); return false }
+        updateNote("downloading ${v.optString("versionName")}…")
+        downloadAndInstall(client, base, token)
+        return true
+    }
   }
 
   private fun updateNote(s: String) = runOnUiThread {
@@ -351,19 +367,25 @@ class MainActivity : Activity(), Relay.Listener {
     log("update: $s")
   }
 
-  private fun downloadAndInstall(client: okhttp3.OkHttpClient, base: String, token: String) {
-    try {
-      val req = okhttp3.Request.Builder()
-        .url(base.trimEnd('/') + "/app.apk")
-        .header("Authorization", "Bearer $token")
-        .build()
-      val tmp = java.io.File(cacheDir, "update.apk")
-      client.newCall(req).execute().use { res ->
-        if (!res.isSuccessful) { updateNote("download: ${res.code}"); return }
-        res.body!!.byteStream().use { input ->
-          tmp.outputStream().use { input.copyTo(it) }
-        }
+  /** Throws on transport failure so the caller retries; install problems are reported, not retried. */
+  private fun downloadApk(client: okhttp3.OkHttpClient, base: String, token: String): java.io.File? {
+    val req = okhttp3.Request.Builder()
+      .url(base.trimEnd('/') + "/app.apk")
+      .header("Authorization", "Bearer $token")
+      .build()
+    val tmp = java.io.File(cacheDir, "update.apk")
+    client.newCall(req).execute().use { res ->
+      if (!res.isSuccessful) { updateNote("download: ${res.code}"); return null }
+      res.body!!.byteStream().use { input ->
+        tmp.outputStream().use { input.copyTo(it) }
       }
+    }
+    return tmp
+  }
+
+  private fun downloadAndInstall(client: okhttp3.OkHttpClient, base: String, token: String) {
+    val tmp = downloadApk(client, base, token) ?: return
+    try {
       updateNote("downloaded ${(tmp.length() / 1024)} KB, installing…")
       val statusFilter = IntentFilter("space.orkestrate.phone.UPDATE_STATUS")
       val statusReceiver = object : android.content.BroadcastReceiver() {

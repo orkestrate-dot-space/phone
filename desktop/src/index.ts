@@ -47,30 +47,40 @@ async function save() {
   } catch (e) { log("save err", String(e)); }
 }
 
-// ---- jobs ----
-type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: Timer; cap: string };
-const pending = new Map<string, Pending>();
+// ---- jobs: queued → delivered → done/failed/expired (SPEC §3) ----
+type Waiter = { resolve: (v: unknown) => void; reject: (e: Error) => void;
+  timer: Timer; cap: string; deviceId: string; job: Record<string, unknown> };
+const waiting = new Map<string, Waiter>(); // by job id, queued or delivered
 const sockets = new Map<string, any>(); // deviceId -> ws
 const online = (id: string) => sockets.has(id);
 
-function sendJob(deviceId: string, capability: string, params: Record<string, unknown>, timeoutMs = 60000) {
+function deliver(deviceId: string, w: Waiter) {
   const ws = sockets.get(deviceId);
+  if (!ws) return false;
+  try { ws.send(JSON.stringify({ t: "job", job: w.job })); return true; }
+  catch { return false; }
+}
+
+function sendJob(deviceId: string, capability: string, params: Record<string, unknown>, timeoutMs = 60000) {
   const id = "job_" + b64url(rand(9));
   const job = { id, capability, params, timeoutMs };
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      pending.delete(id);
+      waiting.delete(id);
       reject(new Error("timeout waiting for phone"));
     }, timeoutMs);
-    pending.set(id, { resolve, reject, timer, cap: capability });
-    if (ws) {
-      try { ws.send(JSON.stringify({ t: "job", job })); }
-      catch (e) { clearTimeout(timer); pending.delete(id); reject(e as Error); }
-    } else {
-      clearTimeout(timer); pending.delete(id);
-      reject(new Error("device offline"));
-    }
+    const w: Waiter = { resolve, reject, timer, cap: capability, deviceId, job };
+    waiting.set(id, w);
+    if (deliver(deviceId, w)) log(`job ${id} ${capability} → live`);
+    else log(`job ${id} ${capability} queued (device offline)`);
   });
+}
+
+/** Push queued jobs on (re)connect. Called from the hello handler. */
+function flushQueue(deviceId: string) {
+  for (const [id, w] of waiting) {
+    if (w.deviceId === deviceId && deliver(deviceId, w)) log(`job ${id} ${w.cap} → delivered on hello`);
+  }
 }
 
 // ---- relay: HTTP (redeem, app channel) + WS (device channel) ----
@@ -152,14 +162,15 @@ const server = Bun.serve({
         ws.data.authed = true; ws.data.deviceId = dev.id;
         log(`hello ${dev.id} caps=${(msg.caps ?? []).join(",")}`);
         ws.send(JSON.stringify({ t: "welcome", deviceId: dev.id }));
+        flushQueue(dev.id);
         return;
       }
       if (msg.t === "pong") return;
       if (msg.t === "ping") { ws.send(JSON.stringify({ t: "pong" })); return; }
       if (msg.t === "result") {
-        const p = pending.get(msg.id);
+        const p = waiting.get(msg.id);
         if (!p) return;
-        clearTimeout(p.timer); pending.delete(msg.id);
+        clearTimeout(p.timer); waiting.delete(msg.id);
         if (msg.ok) p.resolve(msg.data ?? {});
         else p.reject(new Error(String(msg.error ?? "phone failed")));
         return;
@@ -207,13 +218,13 @@ async function callTool(name: string) {
     return { code, expires_in: 600 };
   }
   if (name === "phone.battery") {
-    const dev = [...devices.values()].find(d => online(d.id));
+    const dev = [...devices.values()][0]; // queue tolerates offline, hello flushes
     if (!dev) throw new Error("no-device: pair the app and keep it online");
     const data = await sendJob(dev.id, "battery.get", {});
     return data as Record<string, unknown>;
   }
   if (name === "phone.capture_photo") {
-    const dev = [...devices.values()].find(d => online(d.id));
+    const dev = [...devices.values()][0]; // queue tolerates offline, hello flushes
     if (!dev) throw new Error("no-device: pair the app and keep it online");
     const data = await sendJob(dev.id, "photo.capture", { maxPx: 1280, quality: 80 }, 300000);
     return data as Record<string, unknown>;
