@@ -245,7 +245,7 @@
       <TextView
         android:id="@+id/updateStatus"
         style="@style/RowDesc"
-        android:text="v0.17.12 · no check yet" />
+        android:text="v0.17.13 · no check yet" />
       <TextView
         android:id="@+id/selfUpdateStatus"
         style="@style/RowDesc"
