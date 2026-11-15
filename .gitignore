@@ -1,2 +1,5 @@
 dist/*.apk
 .DS_Store
+
+# private reference only — never commit
+app-reference/
