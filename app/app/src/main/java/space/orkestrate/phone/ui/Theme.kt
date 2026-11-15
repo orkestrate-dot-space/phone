@@ -56,9 +56,11 @@ fun PhoneTheme(useCustomFonts: Boolean = true, content: @Composable () -> Unit) 
   val mono = if (useCustomFonts) PlexMono else PlexMonoFallback
   val typography = Typography(
     headlineSmall = TextStyle(fontFamily = inter, fontSize = 28.sp, fontWeight = FontWeight.SemiBold),
+    titleLarge = TextStyle(fontFamily = inter, fontSize = 22.sp, fontWeight = FontWeight.SemiBold),
     titleMedium = TextStyle(fontFamily = inter, fontSize = 16.sp, fontWeight = FontWeight.Medium),
     bodyMedium = TextStyle(fontFamily = inter, fontSize = 14.sp),
     bodySmall = TextStyle(fontFamily = inter, fontSize = 12.sp, color = PhMuted),
+    labelMedium = TextStyle(fontFamily = inter, fontSize = 14.sp, fontWeight = FontWeight.Medium),
     labelSmall = TextStyle(fontFamily = mono, fontSize = 12.sp),
   )
   MaterialTheme(
