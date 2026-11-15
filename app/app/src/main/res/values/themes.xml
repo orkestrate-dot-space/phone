@@ -9,5 +9,7 @@
     <item name="colorOnSurfaceVariant">@color/ph_muted</item>
     <item name="android:windowBackground">@color/ph_bg</item>
     <item name="colorOutline">@color/ph_border</item>
+    <item name="android:fontFamily">@font/inter_family</item>
+    <item name="fontFamily">@font/inter_family</item>
   </style>
 </resources>

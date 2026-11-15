@@ -106,10 +106,14 @@ class MainActivity : Activity(), Relay.Listener {
     findViewById<Button>(R.id.tabAsk).setOnClickListener {
       findViewById<LinearLayout>(R.id.askBox).visibility = View.VISIBLE
       findViewById<LinearLayout>(R.id.diyBox).visibility = View.GONE
+      findViewById<Button>(R.id.tabAsk).apply { setBackgroundResource(R.drawable.btn_primary); setTextColor(0xFFFFFFFF.toInt()) }
+      findViewById<Button>(R.id.tabDiy).apply { background = null; setTextColor(resources.getColor(R.color.ph_muted, theme)) }
     }
     findViewById<Button>(R.id.tabDiy).setOnClickListener {
       findViewById<LinearLayout>(R.id.askBox).visibility = View.GONE
       findViewById<LinearLayout>(R.id.diyBox).visibility = View.VISIBLE
+      findViewById<Button>(R.id.tabDiy).apply { setBackgroundResource(R.drawable.btn_primary); setTextColor(0xFFFFFFFF.toInt()) }
+      findViewById<Button>(R.id.tabAsk).apply { background = null; setTextColor(resources.getColor(R.color.ph_muted, theme)) }
     }
     findViewById<Button>(R.id.copyPrompt).setOnClickListener {
       val cm = getSystemService(android.content.ClipboardManager::class.java)
@@ -198,6 +202,18 @@ class MainActivity : Activity(), Relay.Listener {
       try {
         startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
       } catch (e: Exception) { shellNote("open Settings manually") }
+    }
+    findViewById<LinearLayout>(R.id.rowRelay).setOnClickListener {
+      val d = findViewById<LinearLayout>(R.id.relayDetail)
+      val open = d.visibility != View.VISIBLE
+      d.visibility = if (open) View.VISIBLE else View.GONE
+      findViewById<TextView>(R.id.relayChevron).text = if (open) "⌄" else "›"
+    }
+    findViewById<LinearLayout>(R.id.rowDevice).setOnClickListener {
+      val d = findViewById<LinearLayout>(R.id.deviceDetail)
+      val open = d.visibility != View.VISIBLE
+      d.visibility = if (open) View.VISIBLE else View.GONE
+      findViewById<TextView>(R.id.deviceChevron).text = if (open) "⌄" else "›"
     }
     findViewById<Button>(R.id.relaySave).setOnClickListener {
       val r = findViewById<EditText>(R.id.relayEdit).text.toString().trim()

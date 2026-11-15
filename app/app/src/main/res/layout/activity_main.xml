@@ -31,18 +31,13 @@
         android:orientation="vertical">
         <TextView
           android:id="@+id/status"
-          android:layout_width="wrap_content"
-          android:layout_height="wrap_content"
+          style="@style/RowTitle"
+          android:layout_marginTop="0dp"
           android:text="not paired"
-          android:textColor="@color/ph_text"
-          android:textSize="18sp"
-          android:textStyle="bold" />
+          android:textSize="18sp" />
         <TextView
           android:id="@+id/identity"
-          android:layout_width="wrap_content"
-          android:layout_height="wrap_content"
-          android:textColor="@color/ph_muted"
-          android:textSize="13sp" />
+          style="@style/RowDesc" />
       </LinearLayout>
     </LinearLayout>
 
@@ -93,28 +88,42 @@
         android:visibility="gone">
         <TextView
           style="@style/RowTitle"
+          android:layout_marginTop="0dp"
           android:text="Connect your agent"
           android:textSize="18sp" />
         <TextView
           android:id="@+id/setupStatus"
           style="@style/RowDesc"
           android:text="This screen checks each step as it happens." />
+
+        <!-- segmented tab control, matches the official app's picker rows -->
         <LinearLayout
           android:layout_width="match_parent"
           android:layout_height="wrap_content"
           android:orientation="horizontal"
-          android:layout_marginTop="8dp">
+          android:layout_marginTop="14dp"
+          android:background="@color/ph_bg_soft"
+          android:padding="4dp">
           <Button
             android:id="@+id/tabAsk"
-            android:layout_width="wrap_content"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="@drawable/btn_primary"
+            android:textColor="#FFFFFF"
+            android:textAllCaps="false"
             android:text="Ask your agent" />
           <Button
             android:id="@+id/tabDiy"
-            android:layout_width="wrap_content"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:backgroundTint="@android:color/transparent"
+            android:textColor="@color/ph_muted"
+            android:textAllCaps="false"
             android:text="Do it yourself" />
         </LinearLayout>
+
         <LinearLayout
           android:id="@+id/askBox"
           android:layout_width="match_parent"
@@ -125,24 +134,26 @@
             android:text="1 · Paste this into your agent" />
           <TextView
             android:id="@+id/agentPrompt"
+            style="@style/MonoValueMuted"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Pair my phone companion app: 1) call phone.doctor to find my relay's public URL, 2) call phone.pair to mint a code, 3) reply with exactly one tappable link and no other text: phone://pair?code=CODE&amp;relay=URL"
-            android:textColor="@color/ph_text"
-            android:textSize="13sp"
             android:background="@color/ph_bg_soft"
             android:padding="12dp" />
           <Button
             android:id="@+id/copyPrompt"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
             android:background="@drawable/btn_primary"
             android:textColor="#FFFFFF"
             android:text="Copy" />
           <TextView
             style="@style/RowDesc"
+            android:layout_marginTop="8dp"
             android:text="2 · Tap the link your agent replies with. 3 · Ask it: what's my battery?" />
         </LinearLayout>
+
         <LinearLayout
           android:id="@+id/diyBox"
           android:layout_width="match_parent"
@@ -157,10 +168,9 @@
             android:text="The relay address, plus the code the desktop minted (MCP phone.pair)." />
           <EditText
             android:id="@+id/relayIn"
+            style="@style/MonoValue"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
             android:hint="https://….opentunnel.xyz or http://laptop-ip:19877"
-            android:textColor="@color/ph_text"
             android:textColorHint="@color/ph_dim"
             android:singleLine="true"
             android:inputType="textUri" />
@@ -170,11 +180,10 @@
             android:orientation="horizontal">
             <EditText
               android:id="@+id/codeIn"
+              style="@style/MonoValue"
               android:layout_width="0dp"
-              android:layout_height="wrap_content"
               android:layout_weight="1"
               android:hint="XXXXXXXX"
-              android:textColor="@color/ph_text"
               android:textColorHint="@color/ph_dim"
               android:singleLine="true"
               android:inputType="textCapCharacters" />
@@ -203,6 +212,7 @@
         android:visibility="gone">
         <TextView
           style="@style/RowTitle"
+          android:layout_marginTop="0dp"
           android:text="This phone" />
         <TextView
           style="@style/RowDesc"
@@ -210,7 +220,8 @@
         <LinearLayout
           android:layout_width="match_parent"
           android:layout_height="wrap_content"
-          android:orientation="horizontal">
+          android:orientation="horizontal"
+          android:layout_marginTop="4dp">
           <EditText
             android:id="@+id/nameIn"
             android:layout_width="0dp"
@@ -234,7 +245,7 @@
           android:text="Last job" />
         <TextView
           android:id="@+id/lastJob"
-          style="@style/RowDesc"
+          style="@style/MonoValueMuted"
           android:text="no jobs yet" />
       </LinearLayout>
     </LinearLayout>
@@ -255,23 +266,27 @@
         android:layout_marginTop="12dp">
         <TextView
           style="@style/RowTitle"
+          android:layout_marginTop="0dp"
           android:text="Shell (ADB)" />
         <TextView
           style="@style/RowDesc"
           android:text="Embedded ADB server, paired to this phone's own wireless debugging. Shell-UID commands, no second app." />
         <TextView
           android:id="@+id/shellStatus"
-          style="@style/RowDesc"
-          android:text="checking…" />
+          style="@style/MonoValueMuted"
+          android:layout_marginTop="8dp" />
         <Button
           android:id="@+id/shellSettings"
           android:layout_width="wrap_content"
           android:layout_height="wrap_content"
+          android:layout_marginTop="8dp"
+          android:background="@drawable/btn_primary"
+          android:textColor="#FFFFFF"
           android:text="Set up shell" />
       </LinearLayout>
     </LinearLayout>
 
-    <!-- TAB: settings -->
+    <!-- TAB: settings — icon rows → detail card, like the official app -->
     <LinearLayout
       android:id="@+id/tabSettingsBody"
       android:layout_width="match_parent"
@@ -284,28 +299,35 @@
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:background="@drawable/card_bg"
-        android:padding="20dp"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
         android:layout_marginTop="12dp">
-        <TextView
-          style="@style/RowTitle"
-          android:text="Relay" />
-        <TextView
-          android:id="@+id/advRelay"
-          style="@style/RowDesc"
-          android:text="—"
-          android:typeface="monospace"
-          android:textSize="12sp" />
-        <LinearLayout
-          android:layout_width="match_parent"
-          android:layout_height="wrap_content"
-          android:orientation="horizontal">
-          <EditText
-            android:id="@+id/relayEdit"
+
+        <LinearLayout style="@style/SettingsRow" android:id="@+id/rowRelay">
+          <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:orientation="vertical">
+            <TextView style="@style/RowTitle" android:layout_marginTop="0dp" android:text="Relay" />
+            <TextView android:id="@+id/advRelay" style="@style/MonoValueMuted" android:text="—" />
+          </LinearLayout>
+          <TextView android:id="@+id/relayChevron" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="›" android:textColor="@color/ph_muted" android:textSize="18sp" />
+        </LinearLayout>
+        <LinearLayout
+          android:id="@+id/relayDetail"
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:orientation="horizontal"
+          android:visibility="gone"
+          android:paddingBottom="14dp">
+          <EditText
+            android:id="@+id/relayEdit"
+            style="@style/MonoValue"
+            android:layout_width="0dp"
+            android:layout_weight="1"
             android:hint="https://… or http://laptop-ip"
-            android:textColor="@color/ph_text"
             android:textColorHint="@color/ph_dim"
             android:singleLine="true"
             android:inputType="textUri" />
@@ -317,28 +339,27 @@
             android:textColor="#FFFFFF"
             android:text="Use" />
         </LinearLayout>
-      </LinearLayout>
+        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/ph_border" />
 
-      <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:background="@drawable/card_bg"
-        android:padding="20dp"
-        android:layout_marginTop="12dp">
-        <TextView
-          style="@style/RowTitle"
-          android:text="This device" />
-        <TextView
-          android:id="@+id/advDevice"
-          style="@style/RowDesc"
-          android:text="—"
-          android:typeface="monospace"
-          android:textSize="12sp" />
+        <LinearLayout style="@style/SettingsRow" android:id="@+id/rowDevice">
+          <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+            <TextView style="@style/RowTitle" android:layout_marginTop="0dp" android:text="This device" />
+            <TextView android:id="@+id/advDevice" style="@style/MonoValueMuted" android:text="—" />
+          </LinearLayout>
+          <TextView android:id="@+id/deviceChevron" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="›" android:textColor="@color/ph_muted" android:textSize="18sp" />
+        </LinearLayout>
         <LinearLayout
+          android:id="@+id/deviceDetail"
           android:layout_width="match_parent"
           android:layout_height="wrap_content"
-          android:orientation="horizontal">
+          android:orientation="horizontal"
+          android:visibility="gone"
+          android:paddingBottom="14dp">
           <Button
             android:id="@+id/unpairBtn"
             android:layout_width="wrap_content"
@@ -350,66 +371,34 @@
             android:layout_height="wrap_content"
             android:text="Forget everything" />
         </LinearLayout>
-      </LinearLayout>
+        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/ph_border" />
 
-      <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:background="@drawable/card_bg"
-        android:padding="20dp"
-        android:layout_marginTop="12dp">
-        <TextView
-          style="@style/RowTitle"
-          android:text="Background" />
-        <TextView
-          style="@style/RowDesc"
-          android:text="Keep the link alive with the screen off. One system prompt." />
-        <LinearLayout
-          android:layout_width="match_parent"
-          android:layout_height="wrap_content"
-          android:orientation="horizontal">
-          <TextView
-            android:id="@+id/bgStatus"
-            style="@style/RowDesc"
+        <LinearLayout style="@style/SettingsRow">
+          <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:layout_gravity="center_vertical"
-            android:text="checking…" />
+            android:orientation="vertical">
+            <TextView style="@style/RowTitle" android:layout_marginTop="0dp" android:text="Background" />
+            <TextView android:id="@+id/bgStatus" style="@style/RowDesc" android:text="checking…" />
+          </LinearLayout>
           <Button
             android:id="@+id/bgBtn"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Allow" />
         </LinearLayout>
-      </LinearLayout>
+        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/ph_border" />
 
-      <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:background="@drawable/card_bg"
-        android:padding="20dp"
-        android:layout_marginTop="12dp">
-        <TextView
-          style="@style/RowTitle"
-          android:text="Auto-approve" />
-        <TextView
-          style="@style/RowDesc"
-          android:text="Exact-match only, read-only recon. Nothing else ever auto-runs." />
-        <LinearLayout
-          android:layout_width="match_parent"
-          android:layout_height="wrap_content"
-          android:orientation="horizontal">
-          <TextView
-            android:id="@+id/autoStatus"
-            style="@style/RowDesc"
+        <LinearLayout style="@style/SettingsRow">
+          <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:layout_gravity="center_vertical"
-            android:text="checking…" />
+            android:orientation="vertical">
+            <TextView style="@style/RowTitle" android:layout_marginTop="0dp" android:text="Auto-approve" />
+            <TextView android:id="@+id/autoStatus" style="@style/RowDesc" android:text="checking…" />
+          </LinearLayout>
           <com.google.android.material.switchmaterial.SwitchMaterial
             android:id="@+id/autoSwitch"
             android:layout_width="wrap_content"
@@ -417,66 +406,54 @@
         </LinearLayout>
         <TextView
           android:id="@+id/autoList"
-          style="@style/RowDesc"
-          android:text="date · uname -a · uptime · getprop ro.build.version.release · getprop ro.product.model · getprop ro.build.version.sdk · cat /proc/version"
-          android:typeface="monospace"
-          android:textSize="12sp" />
-      </LinearLayout>
+          style="@style/MonoValueMuted"
+          android:layout_marginBottom="14dp"
+          android:text="date · uname -a · uptime · getprop ro.build.version.release · getprop ro.product.model · getprop ro.build.version.sdk · cat /proc/version" />
+        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/ph_border" />
 
-      <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:background="@drawable/card_bg"
-        android:padding="20dp"
-        android:layout_marginTop="12dp">
-        <TextView
-          style="@style/RowTitle"
-          android:text="Updates" />
-        <TextView
-          android:id="@+id/buildInfo"
-          style="@style/RowDesc"
-          android:text="—"
-          android:typeface="monospace"
-          android:textSize="12sp" />
-        <TextView
-          android:id="@+id/updateStatus"
-          style="@style/RowDesc"
-          android:text="checking…" />
-        <LinearLayout
-          android:layout_width="match_parent"
-          android:layout_height="wrap_content"
-          android:orientation="horizontal">
-          <TextView
-            android:id="@+id/selfUpdateStatus"
-            style="@style/RowDesc"
+        <LinearLayout style="@style/SettingsRow">
+          <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:layout_gravity="center_vertical"
-            android:text="checking…" />
+            android:orientation="vertical">
+            <TextView style="@style/RowTitle" android:layout_marginTop="0dp" android:text="Agent self-update" />
+            <TextView android:id="@+id/selfUpdateStatus" style="@style/RowDesc" android:text="checking…" />
+          </LinearLayout>
           <com.google.android.material.switchmaterial.SwitchMaterial
             android:id="@+id/selfUpdateSwitch"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content" />
         </LinearLayout>
-        <ProgressBar
-          android:id="@+id/updateProgress"
-          style="?android:attr/progressBarStyleHorizontal"
+
+        <LinearLayout
           android:layout_width="match_parent"
           android:layout_height="wrap_content"
-          android:max="100"
-          android:visibility="gone" />
-        <Button
-          android:id="@+id/updateBtn"
-          android:layout_width="wrap_content"
-          android:layout_height="wrap_content"
-          android:background="@drawable/btn_primary"
-          android:textColor="#FFFFFF"
-          android:text="Check update" />
+          android:orientation="vertical"
+          android:layout_marginBottom="14dp">
+          <TextView android:id="@+id/buildInfo" style="@style/MonoValueMuted" android:text="—" />
+          <TextView android:id="@+id/updateStatus" style="@style/RowDesc" android:text="checking…" />
+          <ProgressBar
+            android:id="@+id/updateProgress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="100"
+            android:layout_marginTop="6dp"
+            android:visibility="gone" />
+          <Button
+            android:id="@+id/updateBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/btn_primary"
+            android:textColor="#FFFFFF"
+            android:text="Check update" />
+        </LinearLayout>
       </LinearLayout>
 
       <LinearLayout
+        android:id="@+id/logCard"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
@@ -486,14 +463,11 @@
         android:layout_marginBottom="8dp">
         <TextView
           style="@style/RowTitle"
+          android:layout_marginTop="0dp"
           android:text="Log" />
         <TextView
           android:id="@+id/logView"
-          android:layout_width="match_parent"
-          android:layout_height="wrap_content"
-          android:textColor="@color/ph_muted"
-          android:textSize="12sp"
-          android:typeface="monospace" />
+          style="@style/MonoValueMuted" />
       </LinearLayout>
     </LinearLayout>
 
