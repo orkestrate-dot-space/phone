@@ -3,6 +3,7 @@ package space.orkestrate.phone
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -33,7 +34,7 @@ import java.io.ByteArrayOutputStream
  * Visual language mirrors the browse-extension settings ref (single dark
  * card, lowercase section labels, control right) — nothing more.
  */
-class MainActivity : Activity(), Relay.Listener {
+class MainActivity : AppCompatActivity(), Relay.Listener {
 
   private lateinit var store: Store
   private lateinit var relay: Relay
