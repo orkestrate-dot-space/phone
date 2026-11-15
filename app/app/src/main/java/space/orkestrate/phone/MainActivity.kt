@@ -216,6 +216,18 @@ class MainActivity : AppCompatActivity(), Relay.Listener {
       d.visibility = if (open) View.VISIBLE else View.GONE
       findViewById<TextView>(R.id.deviceChevron).text = if (open) "⌄" else "›"
     }
+    findViewById<LinearLayout>(R.id.rowLog).setOnClickListener {
+      val d = findViewById<TextView>(R.id.logView)
+      val open = d.visibility != View.VISIBLE
+      d.visibility = if (open) View.VISIBLE else View.GONE
+      findViewById<TextView>(R.id.logChevron).text = if (open) "⌄" else "›"
+    }
+    findViewById<LinearLayout>(R.id.rowUpdates).setOnClickListener {
+      val d = findViewById<LinearLayout>(R.id.updateDetail)
+      val open = d.visibility != View.VISIBLE
+      d.visibility = if (open) View.VISIBLE else View.GONE
+      findViewById<TextView>(R.id.updatesChevron).text = if (open) "⌄" else "›"
+    }
     findViewById<Button>(R.id.relaySave).setOnClickListener {
       val r = findViewById<EditText>(R.id.relayEdit).text.toString().trim()
       if (r.isBlank()) { log("relay address empty"); return@setOnClickListener }

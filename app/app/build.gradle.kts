@@ -12,8 +12,8 @@ android {
     applicationId = "space.orkestrate.phone"
     minSdk = 29
     targetSdk = 36
-    versionCode = 38
-    versionName = "0.18.5"
+    versionCode = 39
+    versionName = "0.18.6"
   }
 
   buildTypes {

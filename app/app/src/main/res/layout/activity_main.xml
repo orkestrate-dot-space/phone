@@ -425,12 +425,20 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content" />
         </LinearLayout>
+        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/ph_border" />
 
+        <LinearLayout style="@style/SettingsRow" android:id="@+id/rowUpdates">
+          <TextView style="@style/RowTitle" android:layout_marginTop="0dp" android:layout_width="0dp" android:layout_weight="1" android:text="Updates" />
+          <TextView android:id="@+id/updatesChevron" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="›" android:textColor="@color/ph_muted" android:textSize="18sp" />
+        </LinearLayout>
         <LinearLayout
+          android:id="@+id/updateDetail"
           android:layout_width="match_parent"
           android:layout_height="wrap_content"
           android:orientation="vertical"
-          android:layout_marginBottom="14dp">
+          android:visibility="gone"
+          android:paddingBottom="14dp">
           <TextView android:id="@+id/buildInfo" style="@style/MonoValueMuted" android:text="—" />
           <TextView android:id="@+id/updateStatus" style="@style/RowDesc" android:text="checking…" />
           <ProgressBar
@@ -461,13 +469,15 @@
         android:padding="20dp"
         android:layout_marginTop="12dp"
         android:layout_marginBottom="8dp">
-        <TextView
-          style="@style/RowTitle"
-          android:layout_marginTop="0dp"
-          android:text="Log" />
+        <LinearLayout style="@style/SettingsRow" android:id="@+id/rowLog">
+          <TextView style="@style/RowTitle" android:layout_marginTop="0dp" android:layout_width="0dp" android:layout_weight="1" android:text="Log" />
+          <TextView android:id="@+id/logChevron" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="›" android:textColor="@color/ph_muted" android:textSize="18sp" />
+        </LinearLayout>
         <TextView
           android:id="@+id/logView"
-          style="@style/MonoValueMuted" />
+          style="@style/MonoValueMuted"
+          android:visibility="gone" />
       </LinearLayout>
     </LinearLayout>
 
