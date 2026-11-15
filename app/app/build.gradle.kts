@@ -1,6 +1,7 @@
 plugins {
   id("com.android.application")
   id("org.jetbrains.kotlin.android")
+  id("app.cash.paparazzi")
 }
 
 android {
@@ -11,8 +12,8 @@ android {
     applicationId = "space.orkestrate.phone"
     minSdk = 29
     targetSdk = 36
-    versionCode = 36
-    versionName = "0.18.3"
+    versionCode = 37
+    versionName = "0.18.4"
   }
 
   buildTypes {
@@ -28,4 +29,5 @@ android {
 dependencies {
   implementation("com.google.android.material:material:1.12.0")
   implementation("com.squareup.okhttp3:okhttp:4.12.0")
+  testImplementation("junit:junit:4.13.2")
 }

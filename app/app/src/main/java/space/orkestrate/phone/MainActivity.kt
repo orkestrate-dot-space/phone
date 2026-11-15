@@ -401,7 +401,12 @@ class MainActivity : Activity(), Relay.Listener {
     findViewById<LinearLayout>(R.id.tabShellBody).visibility = if (name == "shell") View.VISIBLE else View.GONE
     findViewById<LinearLayout>(R.id.tabSettingsBody).visibility = if (name == "settings") View.VISIBLE else View.GONE
     for ((id, key) in listOf(R.id.tabStatus to "status", R.id.tabShell to "shell", R.id.tabSettings to "settings")) {
-      findViewById<Button>(id).alpha = if (key == name) 1f else 0.55f
+      findViewById<Button>(id).apply {
+        val sel = key == name
+        alpha = if (sel) 1f else 0.55f
+        setTypeface(typeface, if (sel) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+        setTextColor(if (sel) 0xFF3B82F6.toInt() else 0xFF9AA3B2.toInt())
+      }
     }
   }
 
