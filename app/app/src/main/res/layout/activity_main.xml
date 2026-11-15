@@ -304,6 +304,17 @@
         android:layout_marginTop="12dp">
 
         <LinearLayout style="@style/SettingsRow" android:id="@+id/rowRelay">
+          <TextView
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_gravity="center_vertical"
+            android:layout_marginEnd="12dp"
+            android:background="@drawable/tile_bg"
+            android:gravity="center"
+            android:text="R"
+            android:textColor="@color/ph_muted"
+            android:textSize="15sp"
+            android:textStyle="bold" />
           <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
@@ -342,6 +353,17 @@
         <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/ph_border" />
 
         <LinearLayout style="@style/SettingsRow" android:id="@+id/rowDevice">
+          <TextView
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_gravity="center_vertical"
+            android:layout_marginEnd="12dp"
+            android:background="@drawable/tile_bg"
+            android:gravity="center"
+            android:text="D"
+            android:textColor="@color/ph_muted"
+            android:textSize="15sp"
+            android:textStyle="bold" />
           <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
@@ -428,6 +450,17 @@
         <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/ph_border" />
 
         <LinearLayout style="@style/SettingsRow" android:id="@+id/rowUpdates">
+          <TextView
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_gravity="center_vertical"
+            android:layout_marginEnd="12dp"
+            android:background="@drawable/tile_bg"
+            android:gravity="center"
+            android:text="U"
+            android:textColor="@color/ph_muted"
+            android:textSize="15sp"
+            android:textStyle="bold" />
           <TextView style="@style/RowTitle" android:layout_marginTop="0dp" android:layout_width="0dp" android:layout_weight="1" android:text="Updates" />
           <TextView android:id="@+id/updatesChevron" android:layout_width="wrap_content" android:layout_height="wrap_content"
             android:text="›" android:textColor="@color/ph_muted" android:textSize="18sp" />
@@ -470,6 +503,17 @@
         android:layout_marginTop="12dp"
         android:layout_marginBottom="8dp">
         <LinearLayout style="@style/SettingsRow" android:id="@+id/rowLog">
+          <TextView
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_gravity="center_vertical"
+            android:layout_marginEnd="12dp"
+            android:background="@drawable/tile_bg"
+            android:gravity="center"
+            android:text="L"
+            android:textColor="@color/ph_muted"
+            android:textSize="15sp"
+            android:textStyle="bold" />
           <TextView style="@style/RowTitle" android:layout_marginTop="0dp" android:layout_width="0dp" android:layout_weight="1" android:text="Log" />
           <TextView android:id="@+id/logChevron" android:layout_width="wrap_content" android:layout_height="wrap_content"
             android:text="›" android:textColor="@color/ph_muted" android:textSize="18sp" />
