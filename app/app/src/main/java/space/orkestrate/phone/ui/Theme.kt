@@ -24,6 +24,7 @@ val PhLink = Color(0xFF9DB2FF)
 val PhToggle = Color(0xFF4A6CF7)
 val PhOk = Color(0xFF4ADE80)
 val PhOnLight = Color(0xFF161616)
+val PhErr = Color(0xFFF87171)
 
 val Inter = FontFamily(Font(R.font.inter_family, FontWeight.Normal))
 val PlexMono = FontFamily(
