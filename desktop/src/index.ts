@@ -54,6 +54,9 @@ const waiting = new Map<string, Waiter>(); // by job id, queued or delivered
 const delivered = new Set<string>(); // job ids already pushed down the socket
 const sockets = new Map<string, any>(); // deviceId -> ws
 const online = (id: string) => sockets.has(id);
+// Online device first, else the most recently seen (queue flushes on hello).
+const pickDevice = () => [...devices.values()]
+  .sort((a, b) => Number(online(b.id)) - Number(online(a.id)) || b.lastSeen - a.lastSeen)[0];
 
 function deliver(deviceId: string, w: Waiter) {
   const id = (w.job as any).id as string;
@@ -279,19 +282,19 @@ async function callTool(name: string, params?: any) {
     return { code, expires_in: 600 };
   }
   if (name === "phone.battery") {
-    const dev = [...devices.values()][0]; // queue tolerates offline, hello flushes
+    const dev = pickDevice(); // queue tolerates offline, hello flushes
     if (!dev) throw new Error("no-device: pair the app and keep it online");
     const data = await sendJob(dev.id, "battery.get", {});
     return data as Record<string, unknown>;
   }
   if (name === "phone.capture_photo") {
-    const dev = [...devices.values()][0]; // queue tolerates offline, hello flushes
+    const dev = pickDevice(); // queue tolerates offline, hello flushes
     if (!dev) throw new Error("no-device: pair the app and keep it online");
     const data = await sendJob(dev.id, "photo.capture", { maxPx: 1280, quality: 80 }, 300000);
     return data as Record<string, unknown>;
   }
   if (name === "phone.exec") {
-    const dev = [...devices.values()][0];
+    const dev = pickDevice();
     if (!dev) throw new Error("no-device: pair the app and keep it online");
     const argv = params?.argv;
     if (!Array.isArray(argv) || argv.length === 0 || argv.some((a: unknown) => typeof a !== "string"))
@@ -301,7 +304,7 @@ async function callTool(name: string, params?: any) {
     return data as Record<string, unknown>;
   }
   if (name === "phone.update") {
-    const dev = [...devices.values()][0];
+    const dev = pickDevice();
     if (!dev) throw new Error("no-device: pair the app and keep it online");
     let meta: any = null;
     try { meta = await Bun.file(DIST_DIR + "/version.json").json(); }

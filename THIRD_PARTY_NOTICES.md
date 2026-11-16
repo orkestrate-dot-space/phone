@@ -9,3 +9,7 @@
   project), and the pairing/loopback mechanism (own implementation in
   `AdbShell.kt`). No LADB application code is copied.
 - `phone` is distributed outside the Play Store, satisfying the upload condition.
+
+## Geist Mono (Vercel) — `app/app/src/main/res/font/geist_mono.ttf`
+
+SIL Open Font License 1.1. Source: npm `geist@1.3.1`, `dist/fonts/geist-mono/GeistMono-Regular.ttf`.

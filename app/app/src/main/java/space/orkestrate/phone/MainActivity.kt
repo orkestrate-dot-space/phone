@@ -2,7 +2,6 @@ package space.orkestrate.phone
 
 import android.Manifest
 import android.app.Activity
-import android.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -27,6 +26,20 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import java.io.ByteArrayOutputStream
+import android.view.ViewGroup
+import androidx.activity.OnBackPressedCallback
+import androidx.compose.ui.platform.ComposeView
+import space.orkestrate.phone.ui.ApprovalCard
+import space.orkestrate.phone.ui.DotState
+import space.orkestrate.phone.ui.HomeState
+import space.orkestrate.phone.ui.OrkTheme
+import space.orkestrate.phone.ui.PhoneRoot
+import space.orkestrate.phone.ui.PhoneUiActions
+import space.orkestrate.phone.ui.PhoneUiModel
+import space.orkestrate.phone.ui.Probe
+import space.orkestrate.phone.ui.RecentJob
+import space.orkestrate.phone.ui.Route
+import space.orkestrate.phone.ui.SetupState
 
 /**
  * v0 shell: status header, name, pairing, last job, collapsed advanced.
@@ -61,9 +74,30 @@ class MainActivity : AppCompatActivity(), Relay.Listener {
   private var pendingQuality = 80
   private var lastRelayState = "not paired"
 
+  // ---- Compose surface (screens A–E) over the legacy Views, which stay as Settings ----
+  private val ui = PhoneUiModel()
+  private lateinit var composeView: ComposeView
+  private var manualEntry = false
+  private var tried = false
+  private val recent = ArrayDeque<Pair<String, Long>>()
+  private val cardActions = mutableMapOf<String, Pair<() -> Unit, () -> Unit>>()
+  @Volatile private var probeSeq = 0
+  private val back = object : OnBackPressedCallback(false) {
+    override fun handleOnBackPressed() {
+      if (!composeView.isShown) composeView.visibility = View.VISIBLE
+      else if (ui.route == Route.EnterCode) manualEntry = false
+      syncUi()
+    }
+  }
+
   override fun onCreate(b: Bundle?) {
     super.onCreate(b)
     setContentView(R.layout.activity_main)
+    composeView = ComposeView(this).apply { setContent { OrkTheme { PhoneRoot(ui, actions) } } }
+    addContentView(composeView, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+    // Legacy views stay inflated for findViewById callers but must not be seen or touched.
+    findViewById<ViewGroup>(android.R.id.content).getChildAt(0).visibility = View.GONE
+    onBackPressedDispatcher.addCallback(this, back)
     val app = application as PhoneApp
     store = app.store
     relay = app.relay
@@ -147,20 +181,7 @@ class MainActivity : AppCompatActivity(), Relay.Listener {
       findViewById<Button>(R.id.updateBtn).isEnabled = false
       checkUpdate()
     }
-    findViewById<Button>(R.id.bgBtn).setOnClickListener {
-      try {
-        startActivity(Intent(
-          android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-          android.net.Uri.parse("package:$packageName")))
-      } catch (e: Exception) {
-        log("battery prompt failed: ${e.message}")
-        try {
-          startActivity(Intent(
-            android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-            android.net.Uri.parse("package:$packageName")))
-        } catch (e2: Exception) { log("settings failed: ${e2.message}") }
-      }
-    }
+    findViewById<Button>(R.id.bgBtn).setOnClickListener { requestBgExemption() }
     findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.autoSwitch).setOnCheckedChangeListener { v, on ->
       if (!v.isPressed) return@setOnCheckedChangeListener
       store.autoApprove = on
@@ -263,12 +284,7 @@ class MainActivity : AppCompatActivity(), Relay.Listener {
       else log("approval $id already settled")
     }
     showTab(currentTab)
-    // one-time notification permission ask (approval cards live in the shade)
-    if (android.os.Build.VERSION.SDK_INT >= 33 &&
-      checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
-        android.content.pm.PackageManager.PERMISSION_GRANTED) {
-      requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 41)
-    }
+    // notification permission is asked from screen B (approval cards live in the shade)
   }
 
   override fun onNewIntent(i: Intent) {
@@ -291,15 +307,179 @@ class MainActivity : AppCompatActivity(), Relay.Listener {
 
   private fun handleDeepLink(i: Intent?) {
     val d = i?.data ?: return
-    Log.d("phone", "deep link: $d")
-    if (d.scheme != "phone" || d.host != "pair") return
-    val code = d.getQueryParameter("code") ?: return
-    val r = d.getQueryParameter("relay") ?: return
+    Log.d("phone", "deep link: ${d.scheme}://${d.host}${d.path}")
+    val (code, r) = pairParams(d) ?: return
     relayIn.setText(r); codeIn.setText(code)
     log("deep link → pairing…")
-    relay.pair(r, code) { ok, msg ->
-      runOnUiThread { log(msg); if (ok) { codeIn.setText(""); refreshAll(); (application as PhoneApp).ensureService() } }
+    manualEntry = true
+    ui.enter = ui.enter.copy(relay = r, code = code, error = null)
+    composeView.visibility = View.VISIBLE
+    syncUi()
+    doPair(r, code)
+  }
+
+  /** phone://pair?code&relay, or the QR's https://mobile.orkestrate.space/phone/pair#code&relay. */
+  private fun pairParams(d: Uri): Pair<String, String>? {
+    val q = when {
+      d.scheme == "phone" && d.host == "pair" -> d
+      d.scheme == "https" && d.host == "mobile.orkestrate.space" && (d.path ?: "").startsWith("/phone/pair") ->
+        Uri.parse("x://y?" + (d.encodedFragment ?: return null))
+      else -> return null
     }
+    val code = q.getQueryParameter("code") ?: return null
+    val r = q.getQueryParameter("relay") ?: return null
+    return code to r
+  }
+
+  private fun normalizeRelay(raw: String): String {
+    val t = raw.trim().trimEnd('/')
+    if (t.isEmpty() || t.contains("://")) return t
+    val local = Regex("""^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?$""").matches(t)
+    return (if (local) "http://" else "https://") + t
+  }
+
+  private fun doPair(r: String, code: String) {
+    ui.enter = ui.enter.copy(pending = true, error = null)
+    relay.pair(normalizeRelay(r), code) { ok, msg ->
+      runOnUiThread {
+        log(msg)
+        if (ok) {
+          codeIn.setText(""); manualEntry = false; tried = false
+          ui.enter = ui.enter.copy(code = "", pending = false, error = null)
+          refreshAll(); (application as PhoneApp).ensureService()
+        } else {
+          ui.enter = ui.enter.copy(pending = false, error = pairError(msg))
+        }
+      }
+    }
+  }
+
+  /** Browse's wording for why a pairing failed, from Relay.pair's message. */
+  private fun pairError(msg: String): String {
+    val status = Regex("""^pair (\d{3})""").find(msg)?.groupValues?.get(1)?.toIntOrNull()
+    return when {
+      status == null -> "The relay didn't answer. Check the address and try again."
+      status in 400..499 -> "The relay didn't accept this code. It was mistyped, used or expired."
+      else -> "The relay had a problem ($status). Try again."
+    }
+  }
+
+  private fun scheduleProbe(raw: String) {
+    val seq = ++probeSeq
+    val base = normalizeRelay(raw)
+    if (base.isEmpty()) { ui.enter = ui.enter.copy(probe = Probe.Idle); return }
+    ui.enter = ui.enter.copy(probe = Probe.Checking)
+    Thread {
+      Thread.sleep(600)
+      if (seq != probeSeq) return@Thread
+      val ok = try {
+        val c = okhttp3.OkHttpClient.Builder()
+          .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+          .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS).build()
+        c.newCall(okhttp3.Request.Builder().url("$base/health").build()).execute().use { it.isSuccessful }
+      } catch (_: Exception) { false }
+      runOnUiThread { if (seq == probeSeq) ui.enter = ui.enter.copy(probe = if (ok) Probe.Answered else Probe.NoAnswer) }
+    }.start()
+  }
+
+  private fun requestBgExemption() {
+    try {
+      startActivity(Intent(
+        android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+        android.net.Uri.parse("package:$packageName")))
+    } catch (e: Exception) {
+      log("battery prompt failed: ${e.message}")
+      try {
+        startActivity(Intent(
+          android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+          android.net.Uri.parse("package:$packageName")))
+      } catch (e2: Exception) { log("settings failed: ${e2.message}") }
+    }
+  }
+
+  private fun shortHost(url: String?): String {
+    val h = (url ?: "").substringAfter("://").trimEnd('/')
+    return if (h.length > 28) h.take(8) + "…" + h.takeLast(15) else h
+  }
+
+  private fun notificationsAllowed() = Build.VERSION.SDK_INT < 33 ||
+    checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+
+  /** Recompute everything the Compose screens show from Store + live link state. */
+  private fun syncUi() {
+    if (!::composeView.isInitialized) return
+    val bg = getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
+    ui.route = when {
+      !store.paired -> if (manualEntry) Route.EnterCode else Route.Unpaired
+      !store.setupDone -> Route.JustPaired
+      else -> Route.Home
+    }
+    ui.setup = SetupState(shortHost(store.relayHttp), notificationsAllowed(), bg, tried)
+    val relayLive = lastRelayState.startsWith("connected")
+    val shellLive = adb.serial != null
+    val now = System.currentTimeMillis()
+    ui.home = HomeState(
+      name = store.name,
+      link = when { relayLive -> DotState.On; lastRelayState.startsWith("connecting") -> DotState.Wait; else -> DotState.Off },
+      linkText = when {
+        relayLive && shellLive -> "Relay and shell connected"
+        relayLive -> "Relay connected, shell off"
+        else -> lastRelayState.replaceFirstChar { it.uppercase() }
+      },
+      recent = recent.map { (tool, t) ->
+        RecentJob(tool, if (now - t < 60_000) "Just now" else android.text.format.DateUtils
+          .getRelativeTimeSpanString(t, now, android.text.format.DateUtils.MINUTE_IN_MILLIS).toString())
+      },
+      autoApprove = store.autoApprove,
+      selfUpdate = store.allowSelfUpdate,
+    )
+    back.isEnabled = !composeView.isShown || ui.route == Route.EnterCode
+  }
+
+  private val actions = object : PhoneUiActions {
+    override fun openCamera() {
+      try { startActivity(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)) }
+      catch (e: Exception) { log("no camera app: ${e.message}"); enterCode() }
+    }
+    override fun enterCode() { manualEntry = true; if (ui.enter.relay.isNotBlank()) scheduleProbe(ui.enter.relay); syncUi() }
+    override fun back() { manualEntry = false; syncUi() }
+    override fun relayChanged(v: String) { ui.enter = ui.enter.copy(relay = v, error = null); scheduleProbe(v) }
+    override fun codeChanged(v: String) { ui.enter = ui.enter.copy(code = v.uppercase(), error = null) }
+    override fun paste() {
+      val cm = getSystemService(android.content.ClipboardManager::class.java)
+      val text = cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this@MainActivity)
+        ?.toString()?.trim() ?: return
+      val link = try { pairParams(Uri.parse(text)) } catch (_: Exception) { null }
+      if (link != null) {
+        ui.enter = ui.enter.copy(relay = link.second, code = link.first.uppercase(), error = null)
+        scheduleProbe(link.second)
+      } else codeChanged(text.take(16))
+    }
+    override fun connect() { if (!ui.enter.pending) doPair(ui.enter.relay, ui.enter.code) }
+    override fun allowNotifications() {
+      if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 41)
+      else try {
+        startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+          .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName))
+      } catch (e: Exception) { log("notification settings failed: ${e.message}") }
+    }
+    override fun allowBackground() = requestBgExemption()
+    override fun finishSetup() { store.setupDone = true; syncUi() }
+    override fun autoApprove(on: Boolean) { store.autoApprove = on; refreshAutoStatus(); log("auto-approve ${if (on) "ON" else "OFF"}"); syncUi() }
+    override fun selfUpdate(on: Boolean) { store.allowSelfUpdate = on; refreshAutoStatus(); log("agent self-update ${if (on) "ON" else "OFF"}"); syncUi() }
+    override fun openSettings() { composeView.visibility = View.GONE; showTab("settings"); syncUi() }
+    // Only these two, from real taps on the card's buttons, settle a job.
+    override fun approve(jobId: String) { ui.approval = null; cardActions.remove(jobId)?.first?.invoke() }
+    override fun reject(jobId: String) { ui.approval = null; cardActions.remove(jobId)?.second?.invoke() }
+  }
+
+  private fun showCard(card: ApprovalCard, onApprove: () -> Unit) {
+    cardActions[card.jobId] = onApprove to {
+      relay.reject(card.jobId); cancelNotif(card.jobId); log("rejected ${card.jobId}")
+    }
+    composeView.visibility = View.VISIBLE
+    ui.approval = card
+    syncUi()
   }
 
   private fun refreshAll() {
@@ -318,6 +498,7 @@ class MainActivity : AppCompatActivity(), Relay.Listener {
     refreshAutoStatus()
     if (!store.paired) lastJob.text = "no jobs yet"
     renderHeader()
+    syncUi()
   }
 
   private fun refreshBgStatus() {
@@ -488,61 +669,37 @@ class MainActivity : AppCompatActivity(), Relay.Listener {
     val p = relay.jobParams(jobId)
     val v = p?.optString("versionName", "?") ?: "?"
     val notes = p?.optString("notes", "") ?: ""
-    AlertDialog.Builder(this)
-      .setTitle("Agent wants to update this app")
-      .setMessage("To v$v${if (notes.isNotBlank()) " — $notes" else ""}. Installs silently via shell; the app restarts itself.")
-      .setPositiveButton("Approve & update") { _, _ ->
-        val app = application as PhoneApp
-        SelfUpdate(this, relay, app.adb, store).run(jobId, object : SelfUpdate.Sink {
-          override fun note(s: String) = runOnUiThread { log(s) }
-          override fun progress(pct: Int) = runOnUiThread {
-            findViewById<ProgressBar>(R.id.updateProgress)?.apply {
-              visibility = View.VISIBLE; progress = pct
-            }
+    val rows = mutableListOf("Tool" to "app.update", "Version" to "v$v")
+    if (notes.isNotBlank()) rows += "Notes" to notes
+    showCard(ApprovalCard(jobId, "Your agent wants to update this app.",
+      "It installs, then the app restarts.", rows, "Update App", false)) {
+      val app = application as PhoneApp
+      SelfUpdate(this, relay, app.adb, store).run(jobId, object : SelfUpdate.Sink {
+        override fun note(s: String) = runOnUiThread { log(s) }
+        override fun progress(pct: Int) = runOnUiThread {
+          findViewById<ProgressBar>(R.id.updateProgress)?.apply {
+            visibility = View.VISIBLE; progress = pct
           }
-        })
-      }
-      .setNegativeButton("Reject") { _, _ ->
-        relay.reject(jobId)
-        getSystemService(NotificationManager::class.java).cancel(jobId.hashCode())
-        log("rejected $jobId")
-      }
-      .setOnCancelListener {
-        relay.reject(jobId)
-        getSystemService(NotificationManager::class.java).cancel(jobId.hashCode())
-      }
-      .show()
+        }
+      })
+    }
   }
 
   private fun showPhotoApproval(jobId: String) {
-    AlertDialog.Builder(this)
-      .setTitle("Agent requests a photo")
-      .setMessage("Approve opens your camera. The shot goes to the waiting agent. Nothing captures until you take it.")
-      .setPositiveButton("Approve") { _, _ -> startShot(jobId) }
-      .setNegativeButton("Reject") { _, _ ->
-        relay.reject(jobId); cancelNotif(jobId); log("rejected $jobId")
-      }
-      .setOnCancelListener { relay.reject(jobId); cancelNotif(jobId) }
-      .show()
+    showCard(ApprovalCard(jobId, "Your agent wants a photo.", "Nothing is captured until you take it.",
+      listOf("Tool" to "photo.capture", "Size" to "1280 px, JPEG"), "Open camera", true)) { startShot(jobId) }
   }
 
   private fun showExecApproval(jobId: String) {
     val argv = relay.jobParams(jobId)?.optJSONArray("argv")
       ?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList()
     val tier = if ((application as PhoneApp).adb.serial != null) "shell-UID" else "app sandbox"
-    AlertDialog.Builder(this)
-      .setTitle("Agent wants to run a command")
-      .setMessage("Runs as $tier. Approve runs exactly:\n\n${argv.joinToString(" ")}")
-      .setPositiveButton("Approve & run") { _, _ ->
-        runner().runExec(jobId, argv, object : ExecRunner.Sink {
-          override fun note(s: String) = runOnUiThread { log(s) }
-        })
-      }
-      .setNegativeButton("Reject") { _, _ ->
-        relay.reject(jobId); cancelNotif(jobId); log("rejected $jobId")
-      }
-      .setOnCancelListener { relay.reject(jobId); cancelNotif(jobId) }
-      .show()
+    showCard(ApprovalCard(jobId, "Your agent wants to run a command.", "It runs exactly this, as $tier.",
+      listOf("Tool" to "exec.run", "Command" to argv.joinToString(" ")), "Run Command", false)) {
+      runner().runExec(jobId, argv, object : ExecRunner.Sink {
+        override fun note(s: String) = runOnUiThread { log(s) }
+      })
+    }
   }
 
   private fun runner(): ExecRunner {
@@ -564,6 +721,8 @@ class MainActivity : AppCompatActivity(), Relay.Listener {
   }
 
   override fun onRequestPermissionsResult(rc: Int, perms: Array<out String>, res: IntArray) {
+    super.onRequestPermissionsResult(rc, perms, res)
+    if (rc == 41) { syncUi(); return }
     if (rc == 42) {
       val id = pendingJob ?: return
       pendingJob = null
@@ -817,6 +976,7 @@ class MainActivity : AppCompatActivity(), Relay.Listener {
   override fun onState(s: String) = runOnUiThread {
     lastRelayState = s
     renderHeader()
+    syncUi()
   }
 
   /** One header, both links: relay state + shell state, never one masquerading as the other. */
@@ -832,7 +992,13 @@ class MainActivity : AppCompatActivity(), Relay.Listener {
     }
   }
 
-  override fun onJob(desc: String) = runOnUiThread { lastJob.text = desc }
+  override fun onJob(desc: String) = runOnUiThread {
+    lastJob.text = desc
+    recent.addFirst(desc.substringBefore(" · ") to System.currentTimeMillis())
+    while (recent.size > 3) recent.removeLast()
+    tried = true
+    syncUi()
+  }
 
   override fun onLog(s: String) = runOnUiThread { log(s) }
 

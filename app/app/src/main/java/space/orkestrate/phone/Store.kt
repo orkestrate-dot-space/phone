@@ -35,11 +35,16 @@ class Store(ctx: Context) {
     get() = p.getBoolean("allowSelfUpdate", true)
     set(v) = p.edit().putBoolean("allowSelfUpdate", v).apply()
 
+  /** Post-pairing checklist (screen B) dismissed. Reset on unpair so a re-pair shows it again. */
+  var setupDone: Boolean
+    get() = p.getBoolean("setupDone", false)
+    set(v) = p.edit().putBoolean("setupDone", v).apply()
+
   val paired: Boolean get() = deviceId != null && token != null && relayHttp != null
 
-  fun clearRelay() = p.edit().remove("relayHttp").remove("deviceId").remove("token").apply()
+  fun clearRelay() = p.edit().remove("setupDone").remove("relayHttp").remove("deviceId").remove("token").apply()
 
-  fun clear() = p.edit().remove("relayHttp").remove("deviceId").remove("token")
+  fun clear() = p.edit().remove("setupDone").remove("relayHttp").remove("deviceId").remove("token")
     .remove("adbSerial").remove("adbPaired").remove("adbPairPort").remove("adbConnectPort").apply()
 
   private fun put(k: String, v: String?) =
