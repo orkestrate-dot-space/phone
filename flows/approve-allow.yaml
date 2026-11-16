@@ -1,0 +1,15 @@
+# Approval allow-path gate (emulator).
+# The exec job must already be pending (see /tmp/phone-approve.py for the
+# harness): the card appears, a real on-glass tap completes it.
+# Screenshots land in Maestro's per-run folder, never in the repo.
+appId: space.orkestrate.phone
+---
+- extendedWaitUntil:
+    visible: "Your agent wants to run a command"
+    timeout: 120000
+- takeScreenshot: approve-sheet
+- tapOn: "Run Command"
+- extendedWaitUntil:
+    notVisible: "Your agent wants to run a command"
+    timeout: 30000
+- takeScreenshot: approve-done

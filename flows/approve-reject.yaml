@@ -1,0 +1,14 @@
+# Approval reject-path gate (emulator).
+# The exec job must already be pending: the card appears, a real on-glass
+# tap rejects it, the relay reports the rejection to the waiting agent.
+appId: space.orkestrate.phone
+---
+- extendedWaitUntil:
+    visible: "Your agent wants to run a command"
+    timeout: 120000
+- takeScreenshot: reject-sheet
+- tapOn: "Reject"
+- extendedWaitUntil:
+    notVisible: "Your agent wants to run a command"
+    timeout: 30000
+- takeScreenshot: reject-done
