@@ -376,7 +376,11 @@ class MainActivity : AppCompatActivity(), Relay.Listener {
         val c = okhttp3.OkHttpClient.Builder()
           .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
           .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS).build()
-        c.newCall(okhttp3.Request.Builder().url("$base/health").build()).execute().use { it.isSuccessful }
+        // /version is the public probe; /health answers on relays older than 0.1.
+        listOf("/version", "/health").any { path ->
+          try { c.newCall(okhttp3.Request.Builder().url(base + path).build()).execute().use { it.isSuccessful } }
+          catch (_: Exception) { false }
+        }
       } catch (_: Exception) { false }
       runOnUiThread { if (seq == probeSeq) ui.enter = ui.enter.copy(probe = if (ok) Probe.Answered else Probe.NoAnswer) }
     }.start()

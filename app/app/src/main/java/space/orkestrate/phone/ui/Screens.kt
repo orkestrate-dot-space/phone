@@ -76,7 +76,7 @@ fun UnpairedScreen(onOpenCamera: () -> Unit, onEnterCode: () -> Unit) {
       modifier = Modifier.padding(top = 8.dp).size(250.dp).align(Alignment.CenterHorizontally),
     )
     OrkRow(first = true, lead = { OrkStepNum(1, false) }) {
-      OrkRowText("On your computer, tell your agent", "Set up my phone with mobile.orkestrate.space/phone")
+      OrkRowText("On your computer, tell your agent", "Set up my phone: read https://mobile.orkestrate.space/phone/agent.md")
     }
     OrkRow(first = false, lead = { OrkStepNum(2, false) }) {
       OrkRowText("Scan the code it shows", "Use this phone's camera. The app opens and pairs.")

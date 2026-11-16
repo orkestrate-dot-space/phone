@@ -1,5 +1,5 @@
 {
-  "versionCode": 41,
-  "versionName": "0.18.8",
-  "notes": "Orkestrate brand screens A-E, verified on emulator"
+  "versionCode": 42,
+  "versionName": "0.18.9",
+  "notes": "public relay probe, pair-link flow, agent.md wording"
 }
