@@ -3,3 +3,4 @@ dist/*.apk
 
 # private reference only — never commit
 app-reference/
+design/
