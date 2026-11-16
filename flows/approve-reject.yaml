@@ -4,11 +4,11 @@
 appId: space.orkestrate.phone
 ---
 - extendedWaitUntil:
-    visible: "Your agent wants to run a command"
+    visible: "(?s)Your agent wants to run a command.*"
     timeout: 120000
 - takeScreenshot: reject-sheet
 - tapOn: "Reject"
 - extendedWaitUntil:
-    notVisible: "Your agent wants to run a command"
+    notVisible: "(?s)Your agent wants to run a command.*"
     timeout: 30000
 - takeScreenshot: reject-done
