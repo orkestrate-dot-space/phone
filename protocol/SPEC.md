@@ -14,11 +14,17 @@ One desktop process, one phone app. Phone dials out, jobs go down, results come 
 3. Wrong code 5x voids all pending (Browse rule).
 4. Token: `pt_` + base64url(32 random bytes). Stored both sides. Revoke per-device.
 
-v0 LAN: relay URL is `ws://<laptop-lan-ip>:19877/device`. No tunnel.
+Pairing is started from the computer. `pair` returns a link
+`https://mobile.orkestrate.space/phone/pair#code=XXXXXXXX&relay=<public relay URL>` as a QR (terminal
+text + PNG). The phone's camera opens it: the app handles it via an Android App Link, or the site's pair
+page offers the install first. The code is in the URL fragment, so the site never receives it. The app
+also accepts `phone://pair?code=…&relay=…`. Codes redeem with or without the dash and in any case.
+`pair_wait` returns once the phone has redeemed (also if it redeemed before the call).
 
 ## Transport
 
-- `GET /health` → `{"ok":true,"devices":n}` (no auth).
+- `GET /version` (alias `/health`) → `{"ok":true,"relay":"phone","protocol":1}` (no auth, public through the
+  tunnel, so it says nothing about devices). The app uses it to tell the user whether the relay answers.
 - `WS /device`, header `Authorization: Bearer <token>`. Query `?token=` also accepted.
 - Frames are JSON text messages, `{t, ...}`:
   - app→relay `hello`: `{"t":"hello","deviceId":"...","name":"...","caps":["battery.get"]}`
@@ -131,7 +137,8 @@ Rules, all load-bearing:
 
 - Through the tunnel every visitor looks loopback (peer, Host, headers all
   untrustworthy). So **no HTTP endpoint may decide "local"**: pairing codes
-  are minted only via the MCP `phone.pair` tool, never over HTTP.
+  are minted only by the `pair` tool, never over HTTP. Tool calls reach the running relay over a unix
+  socket (`$PHONE_DATA/control.sock`, mode 0600), which the tunnel cannot reach.
 - Safe to expose: redeem (40-bit Crockford code + 5-strike voiding),
   `WS /device` (Bearer device token), `/app/*` (Bearer device token).
   The random route URL is unguessable, not authentication — tokens are.
@@ -140,15 +147,27 @@ Rules, all load-bearing:
 
 ## MCP surface (live)
 
-- `phone.status` → paired devices + online state + app versions.
-- `phone.battery` → waits for job result (60s; queues while offline, delivers on hello).
-- `phone.capture_photo` → approval-gated, 300s window.
-- `phone.exec` → approval-gated (or auto for the allowlist); result carries `tier`.
-- `phone.update` → ships the relay's dist build to the phone (see `app.update`).
-- `phone.pair` → mints a pairing code (10 min, single use). The ONLY minter.
-- `phone.pair_list` → devices (keys never leave the relay).
-- `phone.revoke {deviceId}` → drops key + socket, fails its queued jobs.
-- `phone.jobs` → queued/awaiting jobs.
-- `phone.doctor` → listener, tunnel routes, devices, queue depths.
+Tool names are unprefixed and use only `[a-z_]`, which every MCP client accepts (clients add the server
+name themselves). The legacy dotted names (`phone.battery`) are still accepted by the relay.
+
+- `status` → paired devices + online state + app versions.
+- `battery` → waits for job result (60s; queues while offline, delivers on hello).
+- `capture_photo` → approval-gated, 300s window.
+- `exec` → approval-gated (or auto for the allowlist); result carries `tier`.
+- `update` → ships the relay's dist build to the phone (see `app.update`).
+- `pair {relay?}` → mints a code (10 min, single use) and returns `pair_url`, `qr` (text block),
+  `qr_png`, `relay_url`. The ONLY minter. The public relay URL is `relay`, `PHONE_PUBLIC_URL`, an
+  opentunnel route for this port, a Tailscale address, then the LAN address (same Wi-Fi only; a
+  `warning` says so).
+- `pair_wait {code?}` → blocks until the phone redeems (up to the code's expiry).
+- `pair_list` → devices (keys never leave the relay).
+- `revoke {deviceId}` → drops key + socket, fails its queued jobs.
+- `jobs` → queued/awaiting jobs.
+- `doctor` → listener, public URL, devices, queue depths.
+
+One relay serves everything. An MCP process started while a relay already runs on the port forwards
+its tool calls to it over the control socket instead of binding the port. The installed `phone` command
+(`pair`, `wait`, `battery`, `status`, `doctor`, `photo`, `exec`, `update`, `devices`, `revoke`, `mcp`,
+`start`, `stop`, `logs`, `uninstall`) uses the same socket, so setup works before an agent restarts.
 
 Later: `phone.request` (generic approval card), `phone.sms_otp`, `phone.location`.

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>Phone MCP · Orkestrate</title>
+<meta name="description" content="Phone MCP lets your agent use your real Android phone. Photos and commands wait for a tap on the phone.">
+<link rel="canonical" href="https://mobile.orkestrate.space/phone">
+<meta property="og:title" content="Phone MCP · Orkestrate"><meta property="og:description" content="Lets your agent use your real Android phone.">
+{{head}}
+</head>
+<body>
+<div id="live" class="sr-only" aria-live="polite"></div>
+{{nav}}
+
+<main id="main">
+<section class="wrap hero">
+  <h1 class="t-display2">Phone MCP<br><span class="mute">Lets your agent use your real Android phone</span></h1>
+  <div class="acts only-d">
+    <a class="pill solid" href="#setup">Set it up <i data-i="chevron-right"></i></a>
+    <a class="pill quiet" href="https://github.com/orkestrate-dot-space/phone">View on GitHub <i data-i="arrow-right"></i></a>
+  </div>
+  <div class="acts only-m">
+    <a class="pill solid" href="/phone/app"><i data-i="download"></i> Get the app</a>
+    <button class="pill quiet" data-share><i data-i="share"></i> Send link to my computer</button>
+  </div>
+</section>
+
+<div class="wrap-stage stage grain stagebox">
+  <canvas class="harm" aria-hidden="true"></canvas>
+  <div class="win" style="max-width:1180px;margin:0 auto">
+    <div class="win-bar"><span class="dots"><i></i><i></i><i></i></span>Your agent</div>
+    <div class="demo">
+      <div class="chat">
+        <div class="bub">Set up my phone: read https://mobile.orkestrate.space/phone/agent.md</div>
+        <div class="tool">Read <code>mobile.orkestrate.space/phone/agent.md</code></div>
+        <div class="tool">Ran <code>curl -fsSL https://mobile.orkestrate.space/phone/install | bash</code></div>
+        <div class="tool">Ran <code>phone pair --no-wait</code></div>
+        <div class="qrrow">
+          <div class="qr-tile">{{qr-demo}}</div>
+          <p class="say">Scan this with your phone's camera. It opens the app and pairs it. The code works once, within 10 minutes.</p>
+        </div>
+        <div class="tool">Ran <code>phone wait</code></div>
+        <p class="say">Paired with Pixel 8.</p>
+        <div class="tool">Ran <code>phone battery</code></div>
+        <p class="say">Your phone is at 82% and charging. It's ready.</p>
+      </div>
+      <div class="side" aria-hidden="true"><div class="phone"><div class="scr">
+        <div class="h">Paired.<br><span class="mute">Two settings keep it working.</span></div>
+        <div style="margin-top:6px">
+          <div class="row"><div class="tx"><div class="tt">Notifications</div><div class="ts">Approval cards arrive here.</div></div><span class="pill quiet sm">Allow</span></div>
+          <div class="row"><div class="tx"><div class="tt">Background</div><div class="ts">Keeps the link up, screen off.</div></div><span class="pill quiet sm">Allow</span></div>
+          <div class="row"><div class="tx"><div class="tt">Try it</div><div class="ts">Battery checked by your agent.</div></div><i data-i="check"></i></div>
+        </div>
+      </div></div></div>
+    </div>
+  </div>
+</div>
+
+<section class="wrap setup" id="setup">
+  <h2 class="t-title" style="max-width:30ch">Set up.<br><span class="mute">One sentence to your agent, one scan with your phone.</span></h2>
+  <div class="setup-top">
+    <div class="seg" data-seg role="group" aria-label="How to set up">
+      <button class="on" aria-pressed="true" data-cmd="Set up my phone: read https://mobile.orkestrate.space/phone/agent.md" data-after="Paste it to any agent that can run commands.">Ask your agent</button>
+      <button aria-pressed="false" data-cmd="curl -fsSL https://mobile.orkestrate.space/phone/install | bash" data-after="Then run phone pair and scan the code.">Run it yourself</button>
+    </div>
+    <div class="cmd"><code id="cmd-text">Set up my phone: read https://mobile.orkestrate.space/phone/agent.md</code><button type="button" data-copy="#cmd-text" aria-label="Copy command"><i data-i="copy"></i></button></div>
+    <p class="rel" id="cmd-after">Paste it to any agent that can run commands.</p>
+    <p class="rel">Android 10 or newer · Linux or macOS computer · no account</p>
+  </div>
+  <div class="cols">
+    <div class="col"><i data-i="terminal" class="lg"></i><h3>Install</h3><p>Your agent installs the relay as a user service and shows a QR code. No root.</p></div>
+    <div class="col"><i data-i="scan" class="lg"></i><h3>Scan</h3><p>Point the phone's camera at the code. The app opens and pairs. Without the app, the page offers it first.</p></div>
+    <div class="col"><i data-i="bell" class="lg"></i><h3>Allow</h3><p>Notifications carry approval cards. Background access keeps the link up when the screen is off.</p></div>
+    <div class="col"><i data-i="shield" class="lg"></i><h3>Approve</h3><p>Photos and commands wait for a tap on the phone. No call can approve itself.</p></div>
+  </div>
+  <div class="row only-d" style="max-width:640px;margin-top:56px;border-top:1px solid var(--rule)">
+    <div class="qr-tile" style="width:104px;padding:8px;flex:none">{{qr-app}}</div>
+    <div class="tx"><div class="tt">Get the app</div><div class="ts">Scan with your phone's camera, or open mobile.orkestrate.space/phone/app on it.</div></div>
+  </div>
+</section>
+
+<div class="wrap-stage stage close grain closing">
+  <canvas class="harm" data-op=".7" aria-hidden="true"></canvas>
+  <h2>Let your agent use your phone.</h2>
+  <p>Android 10 or newer. No account.</p>
+  <div class="acts"><a class="pill solid lg" href="#setup">Set it up <i data-i="chevron-right"></i></a><a class="pill onstage lg" href="/phone/agent.md">Read agent.md <i data-i="arrow-right"></i></a></div>
+</div>
+</main>
+
+{{footer}}
+<script src="/phone/site.js"></script>
+</body>
+</html>

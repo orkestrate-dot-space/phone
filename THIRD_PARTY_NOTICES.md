@@ -10,6 +10,10 @@
   `AdbShell.kt`). No LADB application code is copied.
 - `phone` is distributed outside the Play Store, satisfying the upload condition.
 
+## QR Code generator library (Project Nayuki) — `desktop/src/qrcodegen.ts`
+MIT License, copyright (c) Project Nayuki. Source: https://www.nayuki.io/page/qr-code-generator-library.
+Vendored unmodified except for `export` on the namespace.
+
 ## Geist Mono (Vercel) — `app/app/src/main/res/font/geist_mono.ttf`
 
 SIL Open Font License 1.1. Source: npm `geist@1.3.1`, `dist/fonts/geist-mono/GeistMono-Regular.ttf`.

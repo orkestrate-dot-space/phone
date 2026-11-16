@@ -1,0 +1,39 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="frameGradient" x1="34" y1="32" x2="226" y2="226" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#262626"/>
+      <stop offset="0.34" stop-color="#C9C9C9"/>
+      <stop offset="0.62" stop-color="#6B6B6B"/>
+      <stop offset="1" stop-color="#111111"/>
+    </linearGradient>
+    <linearGradient id="leftPlane" x1="81" y1="192" x2="135" y2="62" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#171717"/>
+      <stop offset="0.45" stop-color="#5F5F5F"/>
+      <stop offset="1" stop-color="#E8E8E8"/>
+    </linearGradient>
+    <linearGradient id="rightPlane" x1="127" y1="54" x2="190" y2="190" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D8D8D8"/>
+      <stop offset="0.38" stop-color="#909090"/>
+      <stop offset="1" stop-color="#2C2C2C"/>
+    </linearGradient>
+    <linearGradient id="bottomPlane" x1="83" y1="184" x2="179" y2="184" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1A1A1A"/>
+      <stop offset="0.52" stop-color="#5A5A5A"/>
+      <stop offset="1" stop-color="#C9C9C9"/>
+    </linearGradient>
+    <filter id="markShadow" x="44" y="38" width="164" height="166" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="5" stdDeviation="3" flood-color="#000000" flood-opacity="0.2"/>
+    </filter>
+  </defs>
+
+  <path d="M32 32H120L104 48H48V182L32 198V32Z" fill="url(#frameGradient)"/>
+  <path d="M138 32H224V224H34L50 208H208V48H122L138 32Z" fill="url(#frameGradient)"/>
+
+  <g filter="url(#markShadow)">
+    <path d="M128 62L203 192H166L128 126L88 192H53L128 62Z" fill="url(#leftPlane)"/>
+    <path d="M128 62L203 192H166L128 126L108 159L90 126L128 62Z" fill="url(#rightPlane)"/>
+    <path d="M88 192L109 158H166L186 192H88Z" fill="url(#bottomPlane)"/>
+    <path d="M110 158L128 126L147 158H110Z" fill="none" stroke="#111111" stroke-opacity="0.62" stroke-width="3"/>
+    <path d="M128 62L203 192H166L128 126L88 192H53L128 62Z" stroke="#111111" stroke-opacity="0.22" stroke-width="2"/>
+  </g>
+</svg>

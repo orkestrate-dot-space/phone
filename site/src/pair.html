@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>Pair this phone · Orkestrate</title>
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+{{head}}
+</head>
+<body>
+<div id="live" class="sr-only" aria-live="polite"></div>
+{{nav}}
+<main id="main" class="wrap">
+  <div class="page">
+    <h1 class="t-title" id="title">Pair this phone.<br><span class="mute">Your agent's code is ready.</span></h1>
+    <p class="t-bodysm" style="margin-top:16px" id="lede">If the app isn't on this phone yet, get it, then come back and open this link again.</p>
+    <div class="acts">
+      <a class="pill solid wide" href="/phone/app"><i data-i="download"></i> Get the app</a>
+      <a class="pill quiet wide" id="open" href="/phone/app">Open in the app <i data-i="arrow-right"></i></a>
+    </div>
+    <div class="kv" id="kv" hidden>
+      <div class="row"><div class="tx"><div class="ts">Code</div><div class="tt"><code id="code"></code></div></div><span class="t-caption">works once, 10 min</span></div>
+      <div class="row"><div class="tx"><div class="ts">Relay</div><div class="tt"><code id="relay"></code></div></div></div>
+    </div>
+    <p class="note" id="bad" hidden>This link has no pairing code. Ask your agent for a new one, or scan the QR code it shows.</p>
+    <p class="note">The code sits after the # in this link, so it never reaches our server.</p>
+  </div>
+</main>
+{{footer}}
+<script src="/phone/site.js"></script>
+<script>
+  // Reads #code=…&relay=… (never sent to a server). Values are shown as text and validated
+  // before they go into the app link.
+  (function () {
+    var p = new URLSearchParams(location.hash.slice(1));
+    var code = (p.get("code") || "").toUpperCase().replace(/[^0-9A-Z]/g, "");
+    var relay = p.get("relay") || "";
+    var okRelay = /^https?:\/\/[^\s/?#]+(:\d+)?\/?$/.test(relay);
+    if (code.length !== 8 || !okRelay) { document.getElementById("bad").hidden = false; return; }
+    relay = relay.replace(/\/$/, "");
+    document.getElementById("code").textContent = code.slice(0, 4) + "-" + code.slice(4);
+    document.getElementById("relay").textContent = relay;
+    document.getElementById("kv").hidden = false;
+    var q = "code=" + encodeURIComponent(code) + "&relay=" + encodeURIComponent(relay);
+    document.getElementById("open").href =
+      "intent://pair?" + q + "#Intent;scheme=phone;package=space.orkestrate.phone;S.browser_fallback_url=" +
+      encodeURIComponent("https://mobile.orkestrate.space/phone/app") + ";end";
+  })();
+</script>
+</body>
+</html>

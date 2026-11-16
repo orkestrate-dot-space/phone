@@ -16,13 +16,18 @@ Env: `PHONE_PORT` (default 19877), `PHONE_DATA` (device store).
 ## Try it (no phone yet)
 
 ```sh
-curl -s localhost:19877/health
-curl -s -X POST localhost:19877/pair        # loopback only → {code, expires_in}
+bun src/index.ts --serve &                    # the relay
+curl -s localhost:19877/version               # public probe
+bun src/index.ts pair --no-wait               # QR + link (codes are minted only here, never over HTTP)
+bun src/index.ts wait                         # blocks until a phone redeems it
 curl -s -X POST localhost:19877/pair/PD4YAQWJ -H 'content-type: application/json' -d '{"name":"pixel"}'
 ```
 
-Full loop (pair → WS hello → job → result) is covered by `/tmp/phone-e2e.ts`
-with a fake phone; run it after touching `src/`.
+Other CLI commands: `battery`, `status`, `doctor`, `photo`, `exec -- <argv>`, `update`, `devices`, `revoke <id>`.
+They talk to the running relay over `$PHONE_DATA/control.sock`. End users get the same as `phone <cmd>` from
+`site/phone/install`.
+
+`qrcodegen.ts` is Nayuki's QR Code generator (MIT), vendored; see `THIRD_PARTY_NOTICES.md`.
 
 ## Protocol
 

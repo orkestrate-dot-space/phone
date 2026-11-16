@@ -5,6 +5,14 @@ const PORT = Number(process.env.PHONE_PORT ?? "19877");
 const DATA_DIR = process.env.PHONE_DATA ?? new URL("../data/", import.meta.url).pathname;
 const DEVICES_FILE = DATA_DIR + "/devices.json";
 const DIST_DIR = process.env.PHONE_DIST ?? new URL("../../dist/", import.meta.url).pathname;
+// Control socket: the one running relay serves tool calls to agent MCP processes and the
+// CLI over this unix socket (filesystem-permissioned, unreachable through the tunnel).
+const SOCK = process.env.PHONE_SOCK ?? DATA_DIR + "/control.sock";
+const PAIR_BASE = process.env.PHONE_PAIR_BASE ?? "https://mobile.orkestrate.space/phone/pair";
+
+import { chmodSync, mkdirSync, unlinkSync } from "node:fs";
+import { networkInterfaces, tmpdir } from "node:os";
+import { qrPng, qrText } from "./qr";
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // 32 symbols, no I/L/O/U
 const rand = (n: number) => {
@@ -22,6 +30,59 @@ const makeCode = () => {
   return s;
 };
 const log = (...a: unknown[]) => console.error("[phone]", ...a);
+const normCode = (c: unknown) =>
+  typeof c === "string" ? c.toUpperCase().replace(/[^0-9A-Z]/g, "").replace(/[IL]/g, "1").replace(/O/g, "0") : "";
+const prettyCode = (c: string) => c.slice(0, 4) + "-" + c.slice(4);
+
+/** Call a tool on the relay that is already running (service or another MCP process). */
+async function remoteCall(name: string, params?: unknown): Promise<any> {
+  let res: Response;
+  try {
+    res = await fetch("http://phone/call", {
+      unix: SOCK, method: "POST", timeout: false,
+      body: JSON.stringify({ name, params }),
+    } as any);
+  } catch {
+    throw new Error("relay-not-running: start it with `phone start`, or run the MCP server (it starts the relay)");
+  }
+  const j = (await res.json()) as { ok: boolean; result?: unknown; error?: string };
+  if (!j.ok) throw new Error(j.error);
+  return j.result;
+}
+
+// ---- CLI: `phone pair|wait|battery|status|doctor|revoke|photo|exec|update|devices` ----
+const CLI = new Set(["pair", "wait", "battery", "status", "doctor", "revoke", "photo", "exec", "update", "devices"]);
+const CLI_TOOL: Record<string, string> = { wait: "pair_wait", photo: "capture_photo", devices: "pair_list" };
+async function runCli(cmd: string, args: string[]) {
+  const flag = (f: string) => args.includes(f);
+  const rest = args.filter(a => !a.startsWith("--"));
+  const params: Record<string, unknown> = {};
+  if (cmd === "revoke") params.deviceId = rest[0];
+  if (cmd === "wait" && rest[0]) params.code = rest[0];
+  if (cmd === "exec") params.argv = args.slice(args[0] === "--" ? 1 : 0);
+  const relayArg = args.find(a => a.startsWith("--relay="));
+  if (cmd === "pair" && relayArg) params.relay = relayArg.slice(8);
+  const out = await remoteCall(CLI_TOOL[cmd] ?? cmd, params);
+  if (cmd === "pair") {
+    console.log(`Scan this with the phone's camera:\n\n${out.qr}\n`);
+    console.log(`Code    ${out.code} (works once, within 10 minutes)`);
+    console.log(`Link    ${out.pair_url}`);
+    console.log(`Relay   ${out.relay_url} (${out.relay_kind})`);
+    console.log(`PNG     ${out.qr_png}`);
+    if (out.warning) console.log(`Note    ${out.warning}`);
+    if (flag("--no-wait")) { console.log("\nNext: phone wait"); return; }
+    console.log("\nWaiting for the phone...");
+    const done = await remoteCall("pair_wait", { code: out.code });
+    console.log(`Paired: ${done.name} (${done.deviceId})`);
+    return;
+  }
+  if (cmd === "wait") { console.log(`Paired: ${out.name} (${out.deviceId})`); return; }
+  console.log(JSON.stringify(out, null, 2));
+}
+if (CLI.has(process.argv[2] ?? "")) {
+  try { await runCli(process.argv[2], process.argv.slice(3)); process.exit(0); }
+  catch (e) { console.error("phone: " + (e as Error).message); process.exit(1); }
+}
 
 // ---- stores ----
 type Device = { id: string; name: string; token: string; lastSeen: number; appVersion?: number };
@@ -91,35 +152,38 @@ function flushQueue(deviceId: string) {
 
 // ---- relay: HTTP (redeem, app channel) + WS (device channel) ----
 
+let proxyMode = false;
+try {
 const server = Bun.serve({
   port: PORT,
   hostname: "0.0.0.0",
   async fetch(req, srv) {
     const u = new URL(req.url);
-    if (u.pathname === "/health") {
-      return Response.json({ ok: true, devices: devices.size,
-        online: [...sockets.keys()],
-        versions: Object.fromEntries([...devices.values()].map(d => [d.id, d.appVersion ?? null])) });
+    // Public (the tunnel exposes it): reachability probe only, nothing about devices.
+    if (u.pathname === "/version" || u.pathname === "/health") {
+      return Response.json({ ok: true, relay: "phone", protocol: 1 });
     }
     // NOTE: no HTTP mint endpoint. Codes are minted only via the MCP
     // phone.pair tool (loopback stdin, never the network): through a tunnel
     // every visitor looks loopback, so no HTTP endpoint may mean "local".
     // Redeem (below) is safe to expose: 40-bit code + 5-strike voiding.
     // Redeem — phone path (LAN ok)
-    const m = u.pathname.match(/^\/pair\/([A-Z0-9]{8})$/);
+    const m = u.pathname.match(/^\/pair\/([A-Za-z0-9-]{8,9})$/);
     if (m && req.method === "POST") {
-      const hit = codes.get(m[1]);
+      const code = normCode(m[1]);
+      const hit = codes.get(code);
       if (!hit || hit.expires < Date.now()) {
-        if (++strikes >= 5) { codes.clear(); strikes = 0; log("5 strikes, voided"); }
+        if (++strikes >= 5) { voidCodes(); strikes = 0; log("5 strikes, voided"); }
         return Response.json({ error: "invalid or expired code" }, { status: 401 });
       }
-      codes.delete(m[1]); strikes = 0;
+      codes.delete(code); strikes = 0;
       let name = "phone";
       try { name = ((await req.json()) as any)?.name ?? name; } catch {}
       const id = "dev_" + b64url(rand(9));
       const token = "pt_" + b64url(rand(32));
       const d: Device = { id, name: String(name).slice(0, 64), token, lastSeen: Date.now() };
       devices.set(id, d); byToken.set(token, d); await save();
+      markRedeemed(code, d);
       const wsBase = `ws://${u.host}/device`;
       log(`paired ${id} (${d.name})`);
       return Response.json({ deviceId: id, token, relay: wsBase });
@@ -199,40 +263,117 @@ const server = Bun.serve({
     },
   },
 });
+} catch (e) {
+  if ((e as any)?.code !== "EADDRINUSE" && !/EADDRINUSE|in use/i.test(String(e))) throw e;
+  proxyMode = true;
+}
+if (proxyMode && process.argv.includes("--serve")) { log(`port ${PORT} is in use; is a relay already running?`); process.exit(1); }
 
-setInterval(() => {
-  for (const [, ws] of sockets) { try { ws.send(JSON.stringify({ t: "ping" })); } catch {} }
-}, 25000);
+if (!proxyMode) {
+  setInterval(() => {
+    for (const [, ws] of sockets) { try { ws.send(JSON.stringify({ t: "ping" })); } catch {} }
+  }, 25000);
+  mkdirSync(DATA_DIR, { recursive: true });
+  try { unlinkSync(SOCK); } catch {}
+  Bun.serve({
+    unix: SOCK, idleTimeout: 0,
+    async fetch(req) {
+      if (req.method !== "POST") return new Response("POST only", { status: 405 });
+      try {
+        const { name, params } = (await req.json()) as { name: string; params?: any };
+        return Response.json({ ok: true, result: await localCall(name, params) });
+      } catch (e) { return Response.json({ ok: false, error: (e as Error).message }); }
+    },
+  });
+  try { chmodSync(SOCK, 0o600); } catch {}
+}
 
 // stash token on upgrade: Bun doesn't pass headers to open(), so re-derive via URL is
 // already authed above; bind pendingAuth -> _token not needed since hello checks id.
-log(`relay on :${PORT} data=${DATA_DIR}`);
+log(proxyMode ? `relay already running on :${PORT}; forwarding tool calls to it`
+  : `relay on :${PORT} data=${DATA_DIR}`);
 
 // ---- MCP over stdio ----
 const TOOLS = [
-  { name: "phone.status", description: "Paired devices and online state",
+  { name: "status", description: "Paired devices and online state",
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "phone.battery", description: "Read the phone battery via the companion app",
+  { name: "battery", description: "Read the phone battery via the companion app",
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "phone.capture_photo", description: "Ask the human to take a photo (on-glass approval, up to 300s)",
+  { name: "capture_photo", description: "Ask the human to take a photo (on-glass approval, up to 300s)",
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "phone.exec", description: "Run a system command on the phone (on-glass approval every time, app-sandbox limits)",
+  { name: "exec", description: "Run a system command on the phone (on-glass approval every time, app-sandbox limits)",
     inputSchema: { type: "object", properties: { argv: { type: "array", items: { type: "string" } }, timeoutSec: { type: "number" } }, required: ["argv"], additionalProperties: false } },
-  { name: "phone.update", description: "Ship the relay-published build to the phone: downloads + silent shell install, zero taps if opted in",
+  { name: "update", description: "Ship the relay-published build to the phone: downloads + silent shell install, zero taps if opted in",
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "phone.pair", description: "Mint a pairing code (10 min, single use)",
+  { name: "pair", description: "Start pairing a phone: mints a one-time code (10 min) and returns a QR + link for the user to scan with the phone camera. Show the QR to the user, then call pair_wait. Optional relay overrides the public URL.",
+    inputSchema: { type: "object", properties: { relay: { type: "string" } }, additionalProperties: false } },
+  { name: "pair_wait", description: "Block until the phone redeems the pairing code (up to 10 min). Call after showing the QR from pair.",
+    inputSchema: { type: "object", properties: { code: { type: "string" } }, additionalProperties: false } },
+  { name: "pair_list", description: "Paired devices (keys never shown)",
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "phone.pair_list", description: "Paired devices (keys never shown)",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "phone.revoke", description: "Revoke a device: drops its key and socket",
+  { name: "revoke", description: "Revoke a device: drops its key and socket",
     inputSchema: { type: "object", properties: { deviceId: { type: "string" } }, required: ["deviceId"], additionalProperties: false } },
-  { name: "phone.jobs", description: "Jobs currently queued or awaiting results",
+  { name: "jobs", description: "Jobs currently queued or awaiting results",
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "phone.doctor", description: "Relay health: listener, tunnel, devices, queues",
+  { name: "doctor", description: "Relay health: listener, tunnel, devices, queues",
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
 ];
 
-async function callTool(name: string, params?: any) {
+const callTool = (name: string, params?: any) => (proxyMode ? remoteCall(name, params) : localCall(name, params));
+
+// ---- pairing: public URL, redemption tracking ----
+const redeemed = new Map<string, { deviceId: string; name: string }>();
+const pairWaiters = new Map<string, Array<{ resolve: (v: unknown) => void; reject: (e: Error) => void; timer: Timer }>>();
+let latestCode = "";
+function markRedeemed(code: string, d: Device) {
+  const info = { deviceId: d.id, name: d.name };
+  redeemed.set(code, info);
+  setTimeout(() => redeemed.delete(code), 10 * 60 * 1000);
+  for (const w of pairWaiters.get(code) ?? []) { clearTimeout(w.timer); w.resolve({ paired: true, ...info }); }
+  pairWaiters.delete(code);
+}
+function voidCodes() {
+  codes.clear();
+  for (const ws of pairWaiters.values()) for (const w of ws) { clearTimeout(w.timer); w.reject(new Error("codes voided after 5 wrong tries: call pair again")); }
+  pairWaiters.clear();
+}
+function tunnelHost(): string | null {
+  const extra = ["~/.bun/bin", "~/.local/bin", "~/.cargo/bin"].map(p => p.replace("~", process.env.HOME ?? "")).join(":");
+  const bin = Bun.which("opentunnel", { PATH: `${process.env.PATH ?? ""}:${extra}` });
+  if (!bin) return null;
+  try {
+    const out = new TextDecoder().decode(Bun.spawnSync([bin, "route", "list"]).stdout);
+    for (const line of out.split("\n")) {
+      const m = line.match(/^(\S+)\s+(?:→|->)\s+(?:127\.0\.0\.1|localhost):(\d+)\s*$/);
+      if (m && Number(m[2]) === PORT) return m[1];
+    }
+  } catch {}
+  return null;
+}
+function lanIp(): string | null {
+  const found: string[] = [];
+  for (const [name, addrs] of Object.entries(networkInterfaces()))
+    if (!/^(docker|br-|veth|virbr|lo)/.test(name))
+      for (const a of addrs ?? []) if (a.family === "IPv4" && !a.internal) found.push(a.address);
+  const tail = found.find(a => /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(a));
+  return tail ?? found[0] ?? null;
+}
+/** Where the phone should dial: explicit, env, opentunnel route, tailnet, then LAN (same Wi-Fi only). */
+function publicRelay(override?: string): { url: string; kind: string; warning?: string } {
+  const o = (override ?? process.env.PHONE_PUBLIC_URL ?? "").trim().replace(/\/+$/, "");
+  if (o) return { url: /^https?:\/\//.test(o) ? o : "https://" + o, kind: override ? "param" : "env" };
+  const host = tunnelHost();
+  if (host) return { url: "https://" + host, kind: "tunnel" };
+  const ip = lanIp();
+  if (!ip) throw new Error("no-public-url: set PHONE_PUBLIC_URL (e.g. a tunnel or Tailscale URL for port " + PORT + ")");
+  const tail = ip.startsWith("100.");
+  return { url: `http://${ip}:${PORT}`, kind: tail ? "tailnet" : "lan",
+    warning: tail ? "Tailscale address: the phone must be on the same tailnet."
+      : "LAN address: the phone must be on the same Wi-Fi. For use anywhere, set up a tunnel (see agent.md) and rerun pair." };
+}
+
+async function localCall(rawName: string, params?: any) {
+  const name = "phone." + rawName.replace(/^phone[._]/, "");
   if (name === "phone.status") {
     return {
       paired: devices.size > 0,
@@ -268,14 +409,11 @@ async function callTool(name: string, params?: any) {
     };
   }
   if (name === "phone.doctor") {
-    let tunnel: unknown = "unknown (opentunnel CLI not on PATH?)";
-    try {
-      const p = Bun.spawnSync(["/home/pracurser/.bun/bin/opentunnel", "route", "list"]);
-      tunnel = new TextDecoder().decode(p.stdout).trim() || "(no routes)";
-    } catch { tunnel = "opentunnel unavailable"; }
+    let publicUrl: unknown;
+    try { publicUrl = publicRelay(); } catch (e) { publicUrl = (e as Error).message; }
     return {
       relay: { port: PORT, uptimeSec: Math.round(performance.now() / 1000) },
-      tunnelRoutes: tunnel,
+      publicUrl,
       devices: devices.size, online: [...sockets.keys()],
       queuedJobs: [...waiting.values()].filter(w => !online(w.deviceId)).length,
       liveJobs: [...waiting.values()].filter(w => online(w.deviceId)).length,
@@ -284,10 +422,34 @@ async function callTool(name: string, params?: any) {
   if (name === "phone.pair") {
     if ([...codes.values()].filter(c => c.expires > Date.now()).length >= 5)
       throw new Error("too many pending codes");
+    const relay = publicRelay(params?.relay);
     const code = makeCode();
     codes.set(code, { code, expires: Date.now() + 10 * 60 * 1000 });
+    latestCode = code;
+    const pairUrl = `${PAIR_BASE}#code=${code}&relay=${relay.url}`;
+    const png = `${tmpdir()}/phone-pair-${code}.png`;
+    await Bun.write(png, qrPng(pairUrl), { mode: 0o600 });
+    setTimeout(() => { try { unlinkSync(png); } catch {} }, 10 * 60 * 1000);
     log("minted pairing code via MCP");
-    return { code, expires_in: 600 };
+    return { code: prettyCode(code), expires_in: 600, pair_url: pairUrl, relay_url: relay.url,
+      relay_kind: relay.kind, qr_png: png, qr: qrText(pairUrl),
+      ...(relay.warning ? { warning: relay.warning } : {}),
+      next: "Show the QR to the user (or the PNG path / link if it can't render), then call pair_wait." };
+  }
+  if (name === "phone.pair_wait") {
+    const code = normCode(params?.code) || latestCode;
+    if (!code) throw new Error("no pending code: call pair first");
+    const done = redeemed.get(code);
+    if (done) return { paired: true, ...done };
+    const c = codes.get(code);
+    if (!c || c.expires < Date.now()) throw new Error("code expired or voided: call pair again");
+    return await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pairWaiters.set(code, (pairWaiters.get(code) ?? []).filter(w => w.timer !== timer));
+        reject(new Error("timed out: the phone did not redeem the code in time. Call pair again."));
+      }, c.expires - Date.now());
+      pairWaiters.set(code, [...(pairWaiters.get(code) ?? []), { resolve, reject, timer }]);
+    });
   }
   if (name === "phone.battery") {
     const dev = pickDevice(); // queue tolerates offline, hello flushes
@@ -354,7 +516,12 @@ async function handle(msg: any) {
         const name = msg.params?.name;
         try {
           const out = await callTool(name, msg.params?.arguments);
-          if (id !== undefined) reply(id, { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] });
+          if (id !== undefined) {
+            const { qr, ...rest } = (out ?? {}) as Record<string, unknown>;
+            const content: { type: "text"; text: string }[] = [{ type: "text", text: JSON.stringify(rest, null, 2) }];
+            if (typeof qr === "string") content.push({ type: "text", text: qr });
+            reply(id, { content });
+          }
         } catch (e) { if (id !== undefined) replyErr(id, -32000, (e as Error).message); }
         break;
       }
@@ -382,5 +549,5 @@ async function mcpLoop() {
   }
 }
 
-await load();
+if (!proxyMode) await load();
 await mcpLoop();
