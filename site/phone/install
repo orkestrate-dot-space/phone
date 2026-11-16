@@ -113,7 +113,8 @@ case "\$1" in
   logs) journalctl --user -u "\$UNIT.service" -n 50 --no-pager 2>/dev/null || tail -n 50 "\$HOME_DIR/relay.log"; exit \$? ;;
   uninstall) shift
     [ -f "\$HOME_DIR/install.sh" ] || curl -fsSL "https://raw.githubusercontent.com/$REPO/$REF/site/phone/install" -o "\$HOME_DIR/install.sh" || { echo "phone: install script unavailable offline; remove \$HOME_DIR and ~/.local/bin/phone by hand" >&2; exit 1; }
-    exec bash "\$HOME_DIR/install.sh" --uninstall "\$@" ;;
+    # Pass exactly what this install used, never the defaults: a custom unit must not hit another one.
+    exec env PHONE_HOME="\$HOME_DIR" PHONE_UNIT="\$UNIT" XDG_BIN_HOME="$BIN_DIR" bash "\$HOME_DIR/install.sh" --uninstall "\$@" ;;
 esac
 exec "\$BUN" "\$HOME_DIR/src/index.ts" "\$@"
 LAUNCHER
