@@ -187,7 +187,15 @@ const server = Bun.serve({
     },
     close(ws: any) {
       const id = ws.data?.deviceId;
-      if (id && sockets.get(id) === ws) { sockets.delete(id); log(`bye ${id}`); }
+      if (id && sockets.get(id) === ws) {
+        sockets.delete(id);
+        // The app may have died between delivery and response (approvals live
+        // in its memory). Unmark delivered so the next hello truly redelivers
+        // instead of logging a no-op "delivered on hello" for a job the fresh
+        // process never saw.
+        for (const [jid, w] of waiting) if (w.deviceId === id) delivered.delete(jid);
+        log(`bye ${id}`);
+      }
     },
   },
 });
@@ -318,10 +326,14 @@ async function callTool(name: string, params?: any) {
 }
 
 function reply(id: unknown, result: unknown) {
-  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
+  try {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
+  } catch { /* MCP client gone; relay keeps serving the device channel */ }
 }
 function replyErr(id: unknown, code: number, message: string) {
-  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } }) + "\n");
+  try {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } }) + "\n");
+  } catch { /* MCP client gone; relay keeps serving the device channel */ }
 }
 
 async function handle(msg: any) {
