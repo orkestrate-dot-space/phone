@@ -79,7 +79,7 @@ mv "$SRC_DIR/SPEC.md" "$HOME_DIR/protocol/SPEC.md"
 mv "$SRC_DIR/package.json" "$HOME_DIR/package.json"
 # Keep this script so `phone uninstall` works offline. Piped installs have no file to copy.
 if [ -f "${BASH_SOURCE[0]:-}" ]; then cp "${BASH_SOURCE[0]}" "$HOME_DIR/install.sh"
-else curl -fsSL "https://mobile.orkestrate.space/phone/install" -o "$HOME_DIR/install.sh" 2>/dev/null || true; fi
+else curl -fsSL "$RAW/site/phone/install" -o "$HOME_DIR/install.sh" 2>/dev/null || true; fi
 say "installed relay source in $SRC_DIR"
 
 # 3. `phone` launcher: CLI, MCP server (`phone mcp`) and service control in one command
@@ -112,7 +112,7 @@ case "\$1" in
   start|stop|restart) svc "\$1"; exit \$? ;;
   logs) journalctl --user -u "\$UNIT.service" -n 50 --no-pager 2>/dev/null || tail -n 50 "\$HOME_DIR/relay.log"; exit \$? ;;
   uninstall) shift
-    [ -f "\$HOME_DIR/install.sh" ] || curl -fsSL https://mobile.orkestrate.space/phone/install -o "\$HOME_DIR/install.sh" || { echo "phone: install script unavailable offline; remove \$HOME_DIR and ~/.local/bin/phone by hand" >&2; exit 1; }
+    [ -f "\$HOME_DIR/install.sh" ] || curl -fsSL "https://raw.githubusercontent.com/$REPO/$REF/site/phone/install" -o "\$HOME_DIR/install.sh" || { echo "phone: install script unavailable offline; remove \$HOME_DIR and ~/.local/bin/phone by hand" >&2; exit 1; }
     exec bash "\$HOME_DIR/install.sh" --uninstall "\$@" ;;
 esac
 exec "\$BUN" "\$HOME_DIR/src/index.ts" "\$@"
