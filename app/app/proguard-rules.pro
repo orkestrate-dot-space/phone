@@ -1,0 +1,5 @@
+-keep class space.orkestrate.phone.** { *; }
+-dontwarn okhttp3.**
+-dontwarn okio.**
+-dontwarn javax.annotation.**
+-keepattributes Signature,InnerClasses,EnclosingMethod

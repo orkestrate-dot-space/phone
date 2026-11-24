@@ -173,21 +173,25 @@ else
 fi
 
 # 5. Wait for the relay, then report how the phone will reach it
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  curl -fsS -m 2 "http://127.0.0.1:$PORT/version" >/dev/null 2>&1 && break
-  sleep 1
-done
-curl -fsS -m 2 "http://127.0.0.1:$PORT/version" >/dev/null 2>&1 || die "the relay did not come up on port $PORT; run: phone logs"
-say "relay answering on 127.0.0.1:$PORT"
+if [ "${PHONE_NO_SERVICE:-}" != 1 ]; then
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    curl -fsS -m 2 "http://127.0.0.1:$PORT/version" >/dev/null 2>&1 && break
+    sleep 1
+  done
+  curl -fsS -m 2 "http://127.0.0.1:$PORT/version" >/dev/null 2>&1 || die "the relay did not come up on port $PORT; run: phone logs"
+  say "relay answering on 127.0.0.1:$PORT"
+fi
 
-OPENTUNNEL=""
-for c in opentunnel "$HOME/.bun/bin/opentunnel" "$HOME/.cargo/bin/opentunnel" "$HOME/.local/bin/opentunnel"; do
-  command -v "$c" >/dev/null 2>&1 && { OPENTUNNEL="$c"; break; }
-  [ -x "$c" ] && { OPENTUNNEL="$c"; break; }
-done
-if [ -n "$OPENTUNNEL" ] && [ -z "${PHONE_PUBLIC_URL:-}" ]; then
-  "$OPENTUNNEL" route add "$PORT" >/dev/null 2>&1 && say "opentunnel route added for port $PORT (the phone can connect from anywhere)" \
-    || say "opentunnel found but adding a route failed; run: opentunnel route add $PORT"
+if [ "${PHONE_NO_SERVICE:-}" != 1 ]; then
+  OPENTUNNEL=""
+  for c in opentunnel "$HOME/.bun/bin/opentunnel" "$HOME/.cargo/bin/opentunnel" "$HOME/.local/bin/opentunnel"; do
+    command -v "$c" >/dev/null 2>&1 && { OPENTUNNEL="$c"; break; }
+    [ -x "$c" ] && { OPENTUNNEL="$c"; break; }
+  done
+  if [ -n "$OPENTUNNEL" ] && [ -z "${PHONE_PUBLIC_URL:-}" ]; then
+    "$OPENTUNNEL" route add "$PORT" >/dev/null 2>&1 && say "opentunnel route added for port $PORT (the phone can connect from anywhere)" \
+      || say "opentunnel found but adding a route failed; run: opentunnel route add $PORT"
+  fi
 fi
 
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) say "note: $BIN_DIR is not on your PATH; add it, or call $BIN_DIR/phone directly" ;; esac

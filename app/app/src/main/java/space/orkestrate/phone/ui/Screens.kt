@@ -23,20 +23,23 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import space.orkestrate.phone.R
-
-// Screens A–E from /tmp/opencode/design/brand/app.src.html. Stateless: state in, events out.
 
 @Composable
 private fun Screen(
@@ -62,24 +65,24 @@ private fun Screen(
 
 /** A · first open, unpaired. */
 @Composable
-fun UnpairedScreen(onOpenCamera: () -> Unit, onEnterCode: () -> Unit) {
+fun UnpairedScreen(onScanQr: () -> Unit, onEnterCode: () -> Unit) {
   Screen(
     topBar = { OrkTopBar() },
     foot = {
-      OrkPill("Open camera", onOpenCamera, wide = true, icon = OrkIcons.camera)
+      OrkPill("Scan QR code", onScanQr, wide = true, icon = OrkIcons.qrCode)
       OrkLink("Enter code instead", onEnterCode)
     },
   ) {
-    OrkHeading("Pair with your agent.", "It takes one sentence and one scan.")
+    OrkHeading("Pair with your agent.", "One scan connects this phone.")
     Image(
       painterResource(R.drawable.ork_mobile), contentDescription = null,
-      modifier = Modifier.padding(top = 8.dp).size(250.dp).align(Alignment.CenterHorizontally),
+      modifier = Modifier.padding(top = 8.dp).size(230.dp).align(Alignment.CenterHorizontally),
     )
     OrkRow(first = true, lead = { OrkStepNum(1, false) }) {
       OrkRowText("On your computer, tell your agent", "Set up my phone: read https://mobile.orkestrate.space/phone/agent.md")
     }
     OrkRow(first = false, lead = { OrkStepNum(2, false) }) {
-      OrkRowText("Scan the code it shows", "Use this phone's camera. The app opens and pairs.")
+      OrkRowText("Scan the code it shows", "Point this app at the QR code to pair.")
     }
   }
 }
@@ -88,17 +91,21 @@ data class SetupState(
   val relayHost: String,
   val notifications: Boolean,
   val background: Boolean,
+  val accessibility: Boolean,
+  val files: Boolean,
   val tried: Boolean,
 ) {
-  val complete get() = notifications && background && tried
+  val complete get() = notifications && background && accessibility && files && tried
 }
 
-/** B · just paired: the device grants that keep it working, then a live try-it. */
+/** B · post-pair live checklist. Auto-checks off as permissions are granted. */
 @Composable
-fun JustPairedScreen(
+fun SetupScreen(
   s: SetupState,
   onAllowNotifications: () -> Unit,
   onAllowBackground: () -> Unit,
+  onAllowAccessibility: () -> Unit,
+  onAllowFiles: () -> Unit,
   onFinish: () -> Unit,
 ) {
   Screen(
@@ -108,20 +115,34 @@ fun JustPairedScreen(
       else OrkLink("Skip for now", onFinish)
     },
   ) {
-    OrkHeading("Paired.", "Two settings keep it working.")
-    Spacer(Modifier.height(28.dp))
+    OrkHeading("Paired.", "Grant what your agent needs.")
+    Spacer(Modifier.height(24.dp))
     OrkRow(first = true, lead = { OrkStepNum(1, true) }) {
       OrkRowText("Paired with your agent", "Relay at ${s.relayHost}")
     }
     OrkRow(
-      first = false, lead = { OrkStepNum(2, s.notifications) },
-      trailing = if (s.notifications) null else ({ OrkPill("Allow", onAllowNotifications, kind = PillKind.Quiet, small = true) }),
-    ) { OrkRowText("Notifications", "Approval cards arrive here.") }
+      first = false, lead = { OrkStepNum(2, s.notifications && s.background) },
+      trailing = when {
+        !s.notifications -> ({ OrkPill("Allow", onAllowNotifications, kind = PillKind.Quiet, small = true) })
+        !s.background -> ({ OrkPill("Unrestrict", onAllowBackground, kind = PillKind.Quiet, small = true) })
+        else -> null
+      },
+    ) {
+      OrkRowText("Notifications & background", "Keeps the link up and delivers handoff cards.")
+    }
     OrkRow(
-      first = false, lead = { OrkStepNum(3, s.background) },
-      trailing = if (s.background) null else ({ OrkPill("Allow", onAllowBackground, kind = PillKind.Quiet, small = true) }),
-    ) { OrkRowText("Background", "Keeps the link up when the screen is off.") }
-    OrkRow(first = false, lead = { OrkStepNum(4, s.tried) }) {
+      first = false, lead = { OrkStepNum(3, s.accessibility) },
+      trailing = if (s.accessibility) null else ({ OrkPill("Enable", onAllowAccessibility, kind = PillKind.Quiet, small = true) }),
+    ) {
+      OrkRowText("Screen control", "Lets your agent see and operate apps.")
+    }
+    OrkRow(
+      first = false, lead = { OrkStepNum(4, s.files) },
+      trailing = if (s.files) null else ({ OrkPill("Allow", onAllowFiles, kind = PillKind.Quiet, small = true) }),
+    ) {
+      OrkRowText("Files", "Read and write shared storage (/sdcard).")
+    }
+    OrkRow(first = false, lead = { OrkStepNum(5, s.tried) }) {
       Text("Try it", style = OrkType.rowTitle)
       if (s.tried) {
         Text("Your agent's first request arrived.", style = OrkType.label, modifier = Modifier.padding(top = 2.dp))
@@ -142,7 +163,7 @@ data class EnterCodeState(
   val pending: Boolean,
 )
 
-/** C · manual path. The relay is checked before Connect; the one red is destructive. */
+/** C · manual code entry. */
 @Composable
 fun EnterCodeScreen(
   s: EnterCodeState,
@@ -195,25 +216,55 @@ data class HomeState(
   val name: String,
   val link: DotState,
   val linkText: String,
+  val paused: Boolean,
+  val accessibility: Boolean,
+  val files: Boolean,
+  val notifications: Boolean,
+  val camera: Boolean,
   val recent: List<RecentJob>,
-  val autoApprove: Boolean,
-  val selfUpdate: Boolean,
 )
 
 /** D · home, paired. */
 @Composable
 fun HomeScreen(
   s: HomeState,
-  onAutoApprove: (Boolean) -> Unit,
-  onSelfUpdate: (Boolean) -> Unit,
+  onTogglePause: () -> Unit,
+  onOpenAccessibility: () -> Unit,
+  onOpenFiles: () -> Unit,
+  onOpenNotifications: () -> Unit,
+  onOpenCameraPerm: () -> Unit,
   onSettings: () -> Unit,
 ) {
   Screen(topBar = { OrkTopBar { OrkIconButton(OrkIcons.sliders, "Settings", onSettings) } }) {
     OrkHeading(
-      when (s.link) { DotState.On -> "Connected."; DotState.Wait -> "Connecting."; DotState.Off -> "Offline." },
+      when {
+        s.paused -> "Paused."
+        s.link == DotState.On -> "Connected."
+        s.link == DotState.Wait -> "Connecting."
+        else -> "Offline."
+      },
       "Agents call it ${s.name}.",
     )
-    OrkStatusLine(s.link, s.linkText, Modifier.padding(top = 10.dp))
+    Row(
+      Modifier.fillMaxWidth().padding(top = 12.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      OrkStatusLine(if (s.paused) DotState.Off else s.link, s.linkText, Modifier.weight(1f))
+      OrkPill(
+        if (s.paused) "Resume" else "Pause",
+        onTogglePause,
+        kind = if (s.paused) PillKind.Solid else PillKind.Quiet,
+        small = true,
+        icon = if (s.paused) OrkIcons.play else OrkIcons.pause,
+      )
+    }
+
+    Text("Capabilities", style = OrkType.label, modifier = Modifier.padding(top = 28.dp, bottom = 4.dp))
+    CapRow(first = true, icon = OrkIcons.eye, title = "Screen control", ok = s.accessibility, onClick = onOpenAccessibility)
+    CapRow(first = false, icon = OrkIcons.folder, title = "Files (/sdcard)", ok = s.files, onClick = onOpenFiles)
+    CapRow(first = false, icon = OrkIcons.bell, title = "Notifications", ok = s.notifications, onClick = onOpenNotifications)
+    CapRow(first = false, icon = OrkIcons.camera, title = "Camera", ok = s.camera, onClick = onOpenCameraPerm)
+
     Text("Recent", style = OrkType.label, modifier = Modifier.padding(top = 28.dp, bottom = 4.dp))
     if (s.recent.isEmpty()) {
       Text("No requests yet. They show up here as your agent makes them.", style = OrkType.label, modifier = Modifier.padding(vertical = 12.dp))
@@ -224,14 +275,157 @@ fun HomeScreen(
         Text(j.detail, style = OrkType.label, modifier = Modifier.padding(top = 2.dp))
       }
     }
-    Text("Approvals", style = OrkType.label, modifier = Modifier.padding(top = 28.dp, bottom = 4.dp))
-    OrkRow(first = true, trailing = { OrkSwitch(s.autoApprove, "Auto-approve", onAutoApprove) }) {
-      OrkRowText("Auto-approve", "Listed commands run without a tap.")
-    }
-    OrkRow(first = false, trailing = { OrkSwitch(s.selfUpdate, "Agent self-update", onSelfUpdate) }) {
-      OrkRowText("Agent self-update", if (s.selfUpdate) "The agent ships updates without a tap." else "Updates still need your tap.")
-    }
     Spacer(Modifier.height(24.dp))
+  }
+}
+
+@Composable
+private fun CapRow(
+  first: Boolean,
+  icon: androidx.compose.ui.graphics.vector.ImageVector,
+  title: String,
+  ok: Boolean,
+  onClick: () -> Unit,
+) {
+  OrkRow(
+    first = first,
+    vertical = 14.dp,
+    modifier = Modifier.clickable(role = Role.Button, onClick = onClick),
+    lead = { Icon(icon, null, tint = if (ok) Ork.ink else Ork.caption, modifier = Modifier.size(18.dp)) },
+    trailing = {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(if (ok) "Ready" else "Off", style = OrkType.label.copy(color = if (ok) Ork.control else Ork.caption))
+        if (!ok) {
+          Spacer(Modifier.width(4.dp))
+          Icon(OrkIcons.chevronRight, null, tint = Ork.caption, modifier = Modifier.size(16.dp))
+        }
+      }
+    },
+  ) {
+    Text(title, style = OrkType.rowTitle)
+  }
+}
+
+data class SettingsState(
+  val name: String,
+  val deviceId: String,
+  val relayUrl: String,
+  val autoApprove: Boolean,
+  val blockedCount: Int,
+  val shellStatus: String,
+  val shellActionLabel: String?,
+  val selfUpdate: Boolean,
+  val buildInfo: String,
+  val logs: List<String>,
+)
+
+/** F · 100% Compose Settings screen. */
+@Composable
+fun SettingsScreen(
+  s: SettingsState,
+  onBack: () -> Unit,
+  onSaveName: (String) -> Unit,
+  onSaveRelay: (String) -> Unit,
+  onAutoApprove: (Boolean) -> Unit,
+  onShellAction: () -> Unit,
+  onSelfUpdate: (Boolean) -> Unit,
+  onUnpair: () -> Unit,
+  onForgetAll: () -> Unit,
+) {
+  var nameDraft by remember(s.name) { mutableStateOf(s.name) }
+  var relayDraft by remember(s.relayUrl) { mutableStateOf(s.relayUrl) }
+  var devOpen by remember { mutableStateOf(false) }
+  var logOpen by remember { mutableStateOf(false) }
+  var confirmForget by remember { mutableStateOf(false) }
+
+  Screen(
+    topBar = {
+      Row(
+        Modifier.fillMaxWidth().height(56.dp).padding(horizontal = Ork.gutter),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        OrkIconButton(OrkIcons.arrowLeft, "Back", onBack)
+        Spacer(Modifier.width(12.dp))
+        Text("Settings", style = OrkType.brand)
+      }
+    },
+  ) {
+    Text("Identity", style = OrkType.label, modifier = Modifier.padding(top = 8.dp, bottom = 8.dp))
+    OrkField(nameDraft, { nameDraft = it }, "Device name") {
+      if (nameDraft.trim() != s.name && nameDraft.isNotBlank()) {
+        OrkPill("Save", { onSaveName(nameDraft.trim()) }, kind = PillKind.Quiet, small = true, modifier = Modifier.height(32.dp))
+      }
+    }
+    Spacer(Modifier.height(10.dp))
+    OrkField(relayDraft, { relayDraft = it }, "https://...", keyboard = KeyboardOptions(keyboardType = KeyboardType.Uri)) {
+      if (relayDraft.trim() != s.relayUrl && relayDraft.isNotBlank()) {
+        OrkPill("Save", { onSaveRelay(relayDraft.trim()) }, kind = PillKind.Quiet, small = true, modifier = Modifier.height(32.dp))
+      }
+    }
+    OrkRow(first = false, vertical = 12.dp) {
+      Text("Device ID", style = OrkType.label)
+      Text(s.deviceId.ifBlank { "—" }, style = OrkType.mono, modifier = Modifier.padding(top = 2.dp))
+    }
+
+    Text("Safety", style = OrkType.label, modifier = Modifier.padding(top = 20.dp, bottom = 4.dp))
+    OrkRow(first = true, trailing = { OrkSwitch(s.autoApprove, "Auto-approve recon commands", onAutoApprove) }) {
+      OrkRowText("Auto-approve recon commands", "Allowlisted read-only shell commands run without a tap.")
+    }
+    OrkRow(first = false, lead = { Icon(OrkIcons.shield, null, tint = Ork.icon, modifier = Modifier.size(18.dp)) }) {
+      OrkRowText("Blocked apps", "${s.blockedCount} sensitive apps protected (wallet, authenticators, password managers).")
+    }
+
+    Text("Developer", style = OrkType.label, modifier = Modifier.padding(top = 20.dp, bottom = 4.dp))
+    OrkRow(
+      first = true,
+      modifier = Modifier.clickable(role = Role.Button) { devOpen = !devOpen },
+      lead = { Icon(OrkIcons.terminal, null, tint = Ork.icon, modifier = Modifier.size(18.dp)) },
+      trailing = { Icon(OrkIcons.chevronRight, null, tint = Ork.caption, modifier = Modifier.size(16.dp)) },
+    ) {
+      OrkRowText("Shell tier & diagnostics", s.buildInfo)
+    }
+    if (devOpen) {
+      OrkRow(first = false, vertical = 12.dp) {
+        OrkRowText("Wireless ADB shell", s.shellStatus)
+        if (s.shellActionLabel != null) {
+          Spacer(Modifier.height(10.dp))
+          OrkPill(s.shellActionLabel, onShellAction, kind = PillKind.Quiet, small = true)
+        }
+      }
+      OrkRow(first = false, trailing = { OrkSwitch(s.selfUpdate, "Agent self-update", onSelfUpdate) }) {
+        OrkRowText("Agent self-update", "Install updates pushed from your relay without a tap.")
+      }
+      OrkRow(
+        first = false,
+        modifier = Modifier.clickable(role = Role.Button) { logOpen = !logOpen },
+      ) {
+        OrkRowText("Live log", "${s.logs.size} recent entries")
+        if (logOpen && s.logs.isNotEmpty()) {
+          Spacer(Modifier.height(8.dp))
+          Text(s.logs.joinToString("\n"), style = OrkType.mono.copy(color = Ork.caption))
+        }
+      }
+    }
+
+    Text("Pairing", style = OrkType.label, modifier = Modifier.padding(top = 24.dp, bottom = 12.dp))
+    OrkPill("Unpair relay", onUnpair, kind = PillKind.Quiet, wide = true)
+    Spacer(Modifier.height(10.dp))
+    if (!confirmForget) {
+      OrkPill("Forget everything", { confirmForget = true }, kind = PillKind.Quiet, wide = true, icon = OrkIcons.trash)
+    } else {
+      Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(Ork.rControl)).background(Ork.raised)
+          .border(1.dp, Ork.destructive, RoundedCornerShape(Ork.rControl)).padding(16.dp),
+      ) {
+        OrkErrorLine("Clears relay pairing, shell keys, and preferences.")
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+          OrkPill("Cancel", { confirmForget = false }, kind = PillKind.Quiet, small = true, modifier = Modifier.weight(1f))
+          OrkPill("Confirm forget", { confirmForget = false; onForgetAll() }, kind = PillKind.Solid, small = true, modifier = Modifier.weight(1f))
+        }
+      }
+    }
+    Spacer(Modifier.height(32.dp))
   }
 }
 
@@ -245,8 +439,8 @@ data class ApprovalCard(
 )
 
 /**
- * E · approval card over the current screen. Only the two buttons settle it: scrim taps and
- * back do nothing, so a stray touch can neither approve nor reject.
+ * E · approval / handoff card over the current screen. Only the two buttons settle it:
+ * scrim taps and back do nothing, so a stray touch can neither approve nor reject.
  */
 @Composable
 fun BoxScope.ApprovalSheet(card: ApprovalCard, onApprove: () -> Unit, onReject: () -> Unit) {
@@ -270,7 +464,7 @@ fun BoxScope.ApprovalSheet(card: ApprovalCard, onApprove: () -> Unit, onReject: 
         Text(k, style = OrkType.label)
         Spacer(Modifier.width(16.dp))
         Text(
-          v, style = if (k == "Tool" || k == "Command") OrkType.mono else OrkType.label.copy(color = Ork.ink),
+          v, style = if (k == "Tool" || k == "Command" || k == "Path") OrkType.mono else OrkType.label.copy(color = Ork.ink),
           textAlign = TextAlign.End, modifier = Modifier.weight(1f),
         )
       }

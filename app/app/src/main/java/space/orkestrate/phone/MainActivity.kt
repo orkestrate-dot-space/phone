@@ -1,34 +1,35 @@
 package space.orkestrate.phone
 
 import android.Manifest
-import android.app.Activity
-import androidx.appcompat.app.AppCompatActivity
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.PowerManager
 import android.provider.MediaStore
+import android.provider.Settings
+import android.text.format.DateUtils
 import android.util.Base64
 import android.util.Log
-import android.view.View
-import android.widget.Button
-import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.ProgressBar
-import android.widget.TextView
-import java.io.ByteArrayOutputStream
-import android.view.ViewGroup
+import android.view.HapticFeedbackConstants
+import android.widget.Toast
+import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
-import androidx.compose.ui.platform.ComposeView
+import androidx.activity.SystemBarStyle
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
 import space.orkestrate.phone.ui.ApprovalCard
 import space.orkestrate.phone.ui.DotState
 import space.orkestrate.phone.ui.HomeState
@@ -39,322 +40,163 @@ import space.orkestrate.phone.ui.PhoneUiModel
 import space.orkestrate.phone.ui.Probe
 import space.orkestrate.phone.ui.RecentJob
 import space.orkestrate.phone.ui.Route
+import space.orkestrate.phone.ui.SettingsState
 import space.orkestrate.phone.ui.SetupState
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.TimeUnit
 
-/**
- * v0 shell: status header, name, pairing, last job, collapsed advanced.
- * Plus the approval surface: notification + dialog + system camera.
- * Visual language mirrors the browse-extension settings ref (single dark
- * card, lowercase section labels, control right) — nothing more.
- */
-class MainActivity : AppCompatActivity(), Relay.Listener {
+class MainActivity : ComponentActivity(), Relay.Listener {
 
+  private lateinit var app: PhoneApp
   private lateinit var store: Store
   private lateinit var relay: Relay
   private lateinit var adb: AdbShell
 
-  private lateinit var dot: View
-  private lateinit var status: TextView
-  private lateinit var identity: TextView
-  private lateinit var nameIn: EditText
-  private lateinit var relayIn: EditText
-  private lateinit var codeIn: EditText
-  private lateinit var setupBox: LinearLayout
-  private lateinit var statusBox: LinearLayout
-  private lateinit var lastJob: TextView
-  private lateinit var advRelay: TextView
-  private lateinit var advDevice: TextView
-  private lateinit var logView: TextView
-  private val logLines = ArrayDeque<String>()
-  private var currentTab = "status"
-
-  private var pendingShot: Uri? = null
-  private var pendingJob: String? = null
-  private var pendingMaxPx = 1280
-  private var pendingQuality = 80
-  private var lastRelayState = "not paired"
-
-  // ---- Compose surface (screens A–E) over the legacy Views, which stay as Settings ----
   private val ui = PhoneUiModel()
-  private lateinit var composeView: ComposeView
-  private var manualEntry = false
+  private var navMode: Route? = null // Scan, EnterCode, Settings when explicitly opened
   private var tried = false
+  private var lastRelayState = "not paired"
   private val recent = ArrayDeque<Pair<String, Long>>()
+  private val logLines = ArrayDeque<String>()
   private val cardActions = mutableMapOf<String, Pair<() -> Unit, () -> Unit>>()
   @Volatile private var probeSeq = 0
-  private val back = object : OnBackPressedCallback(false) {
-    override fun handleOnBackPressed() {
-      if (!composeView.isShown) composeView.visibility = View.VISIBLE
-      else if (ui.route == Route.EnterCode) manualEntry = false
-      syncUi()
+
+  private var pendingShot: Uri? = null
+  private var pendingPhotoJob: String? = null
+  private var pendingMaxPx = 1280
+  private var pendingQuality = 80
+
+  private val reqNotifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+    syncUi()
+  }
+
+  private val reqCameraPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+    ui.cameraGranted = granted
+    val job = pendingPhotoJob
+    if (job != null) {
+      pendingPhotoJob = null
+      if (granted) launchCamera(job)
+      else { relay.reject(job, "camera denied"); cancelNotif(job); log("camera denied") }
+    }
+    syncUi()
+  }
+
+  private val takePicture = registerForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+    val id = pendingPhotoJob ?: return@registerForActivityResult
+    val uri = pendingShot
+    pendingPhotoJob = null
+    pendingShot = null
+    cancelNotif(id)
+    if (!ok || uri == null) {
+      relay.reject(id, "shot cancelled")
+      log("shot cancelled")
+      return@registerForActivityResult
+    }
+    try {
+      val dataOut = downscale(uri, pendingMaxPx, pendingQuality)
+      relay.approve(id, JSONObject().put("mime", "image/jpeg").put("bytes_b64", dataOut))
+      log("approved $id (${dataOut.length / 1024} KB b64)")
+    } catch (e: Exception) {
+      relay.reject(id, "shot failed: ${e.message}")
+      log("shot failed: ${e.message}")
     }
   }
 
-  override fun onCreate(b: Bundle?) {
-    super.onCreate(b)
-    setContentView(R.layout.activity_main)
-    composeView = ComposeView(this).apply { setContent { OrkTheme { PhoneRoot(ui, actions) } } }
-    addContentView(composeView, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-    // Legacy views stay inflated for findViewById callers but must not be seen or touched.
-    findViewById<ViewGroup>(android.R.id.content).getChildAt(0).visibility = View.GONE
-    onBackPressedDispatcher.addCallback(this, back)
-    val app = application as PhoneApp
+  private val back = object : OnBackPressedCallback(false) {
+    override fun handleOnBackPressed() {
+      if (navMode != null) {
+        navMode = null
+        ui.scanError = null
+        syncUi()
+      }
+    }
+  }
+
+  override fun onCreate(savedInstanceState: Bundle?) {
+    enableEdgeToEdge(
+      statusBarStyle = SystemBarStyle.dark(Color.BLACK),
+      navigationBarStyle = SystemBarStyle.dark(Color.BLACK),
+    )
+    super.onCreate(savedInstanceState)
+    app = application as PhoneApp
     store = app.store
     relay = app.relay
     adb = app.adb
     app.uiListener = this
 
-    dot = findViewById(R.id.dot)
-    status = findViewById(R.id.status)
-    identity = findViewById(R.id.identity)
-    nameIn = findViewById(R.id.nameIn)
-    relayIn = findViewById(R.id.relayIn)
-    codeIn = findViewById(R.id.codeIn)
-    setupBox = findViewById(R.id.setupBox)
-    statusBox = findViewById(R.id.statusBox)
-    lastJob = findViewById(R.id.lastJob)
-    advRelay = findViewById(R.id.advRelay)
-    advDevice = findViewById(R.id.advDevice)
-    logView = findViewById(R.id.logView)
-    findViewById<Button>(R.id.tabStatus).setOnClickListener { showTab("status") }
-    findViewById<Button>(R.id.tabShell).setOnClickListener { showTab("shell") }
-    findViewById<Button>(R.id.tabSettings).setOnClickListener { showTab("settings") }
+    onBackPressedDispatcher.addCallback(this, back)
+    setContent { OrkTheme { PhoneRoot(ui, actions) } }
 
-    nameIn.setText(store.name)
-    findViewById<Button>(R.id.saveName).setOnClickListener {
-      store.name = nameIn.text.toString().ifBlank { android.os.Build.MODEL }
-      refreshIdentity()
-      log("name → ${store.name}")
-    }
-    findViewById<Button>(R.id.pairBtn).setOnClickListener {
-      val r = relayIn.text.toString()
-      val c = codeIn.text.toString()
-      if (r.isBlank() || c.isBlank()) { log("relay + code required"); return@setOnClickListener }
-      log("pairing…")
-      relay.pair(r, c) { ok, msg ->
-        runOnUiThread {
-          log(msg)
-          if (ok) { codeIn.setText(""); refreshAll(); (application as PhoneApp).ensureService() }
-        }
-      }
-    }
-    findViewById<Button>(R.id.tabAsk).setOnClickListener {
-      findViewById<LinearLayout>(R.id.askBox).visibility = View.VISIBLE
-      findViewById<LinearLayout>(R.id.diyBox).visibility = View.GONE
-      findViewById<Button>(R.id.tabAsk).apply { setBackgroundResource(R.drawable.btn_primary); setTextColor(0xFFFFFFFF.toInt()) }
-      findViewById<Button>(R.id.tabDiy).apply { background = null; setTextColor(resources.getColor(R.color.ph_muted, theme)) }
-    }
-    findViewById<Button>(R.id.tabDiy).setOnClickListener {
-      findViewById<LinearLayout>(R.id.askBox).visibility = View.GONE
-      findViewById<LinearLayout>(R.id.diyBox).visibility = View.VISIBLE
-      findViewById<Button>(R.id.tabDiy).apply { setBackgroundResource(R.drawable.btn_primary); setTextColor(0xFFFFFFFF.toInt()) }
-      findViewById<Button>(R.id.tabAsk).apply { background = null; setTextColor(resources.getColor(R.color.ph_muted, theme)) }
-    }
-    findViewById<Button>(R.id.copyPrompt).setOnClickListener {
-      val cm = getSystemService(android.content.ClipboardManager::class.java)
-      cm.setPrimaryClip(android.content.ClipData.newPlainText("agent",
-        findViewById<TextView>(R.id.agentPrompt).text))
-      log("prompt copied — paste it into your agent")
-    }
-    findViewById<Button>(R.id.unpairBtn).setOnClickListener {
-      try { adb.disconnectAll() } catch (_: Exception) {}
-      adb.drop()
-      ShellPairing.reset()
-      relay.disconnect(); store.clearRelay()
-      stopService(Intent(this, RelayService::class.java))
-      refreshAll(); refreshShellStatus(); log("relay unpaired (shell keys kept)")
-    }
-    findViewById<Button>(R.id.forgetBtn).setOnClickListener {
-      try { adb.disconnectAll() } catch (_: Exception) {}
-      adb.drop()
-      try { java.io.File(filesDir, ".android").deleteRecursively() } catch (_: Exception) {}
-      ShellPairing.reset()
-      relay.disconnect(); store.clear()
-      stopService(Intent(this, RelayService::class.java))
-      lastJob.text = "no jobs yet"
-      refreshAll(); refreshShellStatus()
-      log("forgot everything — also: Settings → forget pairings, dev options off")
-    }
-    findViewById<Button>(R.id.updateBtn).setOnClickListener {
-      if (updating) { updateNote("already checking…"); return@setOnClickListener }
-      updating = true
-      findViewById<Button>(R.id.updateBtn).isEnabled = false
-      checkUpdate()
-    }
-    findViewById<Button>(R.id.bgBtn).setOnClickListener { requestBgExemption() }
-    findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.autoSwitch).setOnCheckedChangeListener { v, on ->
-      if (!v.isPressed) return@setOnCheckedChangeListener
-      store.autoApprove = on
-      refreshAutoStatus()
-      log("auto-approve ${if (on) "ON" else "OFF"}")
-    }
-    findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.selfUpdateSwitch).setOnCheckedChangeListener { v, on ->
-      if (!v.isPressed) return@setOnCheckedChangeListener
-      store.allowSelfUpdate = on
-      refreshAutoStatus()
-      log("agent self-update ${if (on) "ON" else "OFF"}")
-    }
-    findViewById<Button>(R.id.shellSettings).setOnClickListener {
-      val devOn = try {
-        android.provider.Settings.Global.getInt(
-          contentResolver, android.provider.Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1
-      } catch (_: Exception) { true }
-      if (!devOn) {
-        try {
-          startActivity(Intent(android.provider.Settings.ACTION_DEVICE_INFO_SETTINGS))
-        } catch (e: Exception) { shellNote("open Settings manually") }
-        return@setOnClickListener
-      }
-      // deepest first: QS-tile prefs intent lands ON the wireless debugging page
-      try {
-        val tile = Intent("android.service.quicksettings.ACTION_QS_TILE_PREFERENCES")
-        tile.putExtra("android.intent.extra.COMPONENT_NAME", android.content.ComponentName(
-          "com.android.settings",
-          "com.android.settings.development.qstile.DevelopmentTiles\$WirelessDebugging"))
-        startActivity(tile)
-        return@setOnClickListener
-      } catch (_: Exception) {}
-      // next: dev options scrolled straight to the wireless row (works on One UI)
-      try {
-        val i = Intent(android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
-        i.putExtra(":settings:fragment_args_key", "toggle_adb_wireless")
-        startActivity(i)
-        return@setOnClickListener
-      } catch (_: Exception) {}
-      try {
-        startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
-      } catch (e: Exception) { shellNote("open Settings manually") }
-    }
-    findViewById<LinearLayout>(R.id.rowRelay).setOnClickListener {
-      val d = findViewById<LinearLayout>(R.id.relayDetail)
-      val open = d.visibility != View.VISIBLE
-      d.visibility = if (open) View.VISIBLE else View.GONE
-      findViewById<TextView>(R.id.relayChevron).text = if (open) "⌄" else "›"
-    }
-    findViewById<LinearLayout>(R.id.rowDevice).setOnClickListener {
-      val d = findViewById<LinearLayout>(R.id.deviceDetail)
-      val open = d.visibility != View.VISIBLE
-      d.visibility = if (open) View.VISIBLE else View.GONE
-      findViewById<TextView>(R.id.deviceChevron).text = if (open) "⌄" else "›"
-    }
-    findViewById<LinearLayout>(R.id.rowLog).setOnClickListener {
-      val d = findViewById<TextView>(R.id.logView)
-      val open = d.visibility != View.VISIBLE
-      d.visibility = if (open) View.VISIBLE else View.GONE
-      findViewById<TextView>(R.id.logChevron).text = if (open) "⌄" else "›"
-    }
-    findViewById<LinearLayout>(R.id.rowUpdates).setOnClickListener {
-      val d = findViewById<LinearLayout>(R.id.updateDetail)
-      val open = d.visibility != View.VISIBLE
-      d.visibility = if (open) View.VISIBLE else View.GONE
-      findViewById<TextView>(R.id.updatesChevron).text = if (open) "⌄" else "›"
-    }
-    findViewById<Button>(R.id.relaySave).setOnClickListener {
-      val r = findViewById<EditText>(R.id.relayEdit).text.toString().trim()
-      if (r.isBlank()) { log("relay address empty"); return@setOnClickListener }
-      relay.disconnect()
-      store.relayHttp = r.trimEnd('/')
-      refreshAll()
-      log("relay → ${store.relayHttp}")
-      (application as PhoneApp).ensureService()
-    }
-
-    // phone://pair?code=XXXXXXXX&relay=http://host:port
     handleDeepLink(intent)
     lastRelayState = if (store.paired) "connecting…" else "not paired"
-    refreshAll()
-    renderHeader()
-    if (store.paired) (application as PhoneApp).ensureService()
-    // silent ADB-channel restore (keys persist; toggle may need a manual flip)
-    if (store.adbPaired && adb.serial != null) {
-      Thread {
-        val s = adb.serial!!
-        val port = s.substringAfterLast(":").toIntOrNull()
-        val ok = if (port != null) adb.connect(port) else false
-        if (ok) selfGrantShell()
-        runOnUiThread { refreshShellStatus() }
-      }.start()
-    } else {
-      refreshShellStatus()
-    }
+    if (store.paired) app.ensureService()
 
-    // opened from the approval notification?
     intent.getStringExtra("approval")?.let { id ->
-      if (relay.pendingApproval(id)) showApproval(id, capabilityOf(id))
-      else log("approval $id already settled")
+      if (relay.pendingApproval(id)) onApproval(id, capabilityOf(id))
     }
-    showTab(currentTab)
-    // notification permission is asked from screen B (approval cards live in the shade)
+    syncUi()
   }
 
-  override fun onNewIntent(i: Intent) {
-    super.onNewIntent(i)
-    handleDeepLink(i)
-    i.getStringExtra("approval")?.let { id ->
-      if (relay.pendingApproval(id)) showApproval(id, capabilityOf(id))
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    handleDeepLink(intent)
+    intent.getStringExtra("approval")?.let { id ->
+      if (relay.pendingApproval(id)) onApproval(id, capabilityOf(id))
     }
   }
 
-  private fun capabilityOf(jobId: String): String {
-    val p = relay.jobParams(jobId)
-    return when {
-      p == null -> "photo.capture"
-      p.has("argv") -> "exec.run"
-      p.has("versionCode") -> "app.update"
-      else -> "photo.capture"
-    }
+  override fun onResume() {
+    super.onResume()
+    app.uiListener = this
+    ui.cameraGranted = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    relay.sendState()
+    syncUi()
+  }
+
+  override fun onDestroy() {
+    if (app.uiListener === this) app.uiListener = null
+    super.onDestroy()
+  }
+
+  private fun hapticConfirm() {
+    window.decorView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+  }
+
+  private fun hapticReject() {
+    window.decorView.performHapticFeedback(HapticFeedbackConstants.REJECT)
   }
 
   private fun handleDeepLink(i: Intent?) {
     val d = i?.data ?: return
-    Log.d("phone", "deep link: ${d.scheme}://${d.host}${d.path}")
-    val (code, r) = pairParams(d) ?: return
-    relayIn.setText(r); codeIn.setText(code)
-    log("deep link → pairing…")
-    manualEntry = true
-    ui.enter = ui.enter.copy(relay = r, code = code, error = null)
-    composeView.visibility = View.VISIBLE
+    val parsed = PairingUri.parse(d.toString()) ?: return
+    navMode = Route.EnterCode
+    ui.enter = ui.enter.copy(relay = parsed.relay, code = parsed.code, error = null)
     syncUi()
-    doPair(r, code)
-  }
-
-  /** phone://pair?code&relay, or the QR's https://mobile.orkestrate.space/phone/pair#code&relay. */
-  private fun pairParams(d: Uri): Pair<String, String>? {
-    val q = when {
-      d.scheme == "phone" && d.host == "pair" -> d
-      d.scheme == "https" && d.host == "mobile.orkestrate.space" && (d.path ?: "").startsWith("/phone/pair") ->
-        Uri.parse("x://y?" + (d.encodedFragment ?: return null))
-      else -> return null
-    }
-    val code = q.getQueryParameter("code") ?: return null
-    val r = q.getQueryParameter("relay") ?: return null
-    return code to r
-  }
-
-  private fun normalizeRelay(raw: String): String {
-    val t = raw.trim().trimEnd('/')
-    if (t.isEmpty() || t.contains("://")) return t
-    val local = Regex("""^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?$""").matches(t)
-    return (if (local) "http://" else "https://") + t
+    doPair(parsed.relay, parsed.code)
   }
 
   private fun doPair(r: String, code: String) {
+    val normRelay = PairingUri.normalizeRelay(r)
+    val normCode = PairingUri.normalizeCode(code)
     ui.enter = ui.enter.copy(pending = true, error = null)
-    relay.pair(normalizeRelay(r), code) { ok, msg ->
+    relay.pair(normRelay, normCode) { ok, msg ->
       runOnUiThread {
         log(msg)
         if (ok) {
-          codeIn.setText(""); manualEntry = false; tried = false
+          hapticConfirm()
+          navMode = null
+          tried = false
           ui.enter = ui.enter.copy(code = "", pending = false, error = null)
-          refreshAll(); (application as PhoneApp).ensureService()
+          app.ensureService()
+          syncUi()
         } else {
+          hapticReject()
           ui.enter = ui.enter.copy(pending = false, error = pairError(msg))
         }
       }
     }
   }
 
-  /** Browse's wording for why a pairing failed, from Relay.pair's message. */
   private fun pairError(msg: String): String {
     val status = Regex("""^pair (\d{3})""").find(msg)?.groupValues?.get(1)?.toIntOrNull()
     return when {
@@ -366,39 +208,23 @@ class MainActivity : AppCompatActivity(), Relay.Listener {
 
   private fun scheduleProbe(raw: String) {
     val seq = ++probeSeq
-    val base = normalizeRelay(raw)
+    val base = PairingUri.normalizeRelay(raw)
     if (base.isEmpty()) { ui.enter = ui.enter.copy(probe = Probe.Idle); return }
     ui.enter = ui.enter.copy(probe = Probe.Checking)
     Thread {
-      Thread.sleep(600)
+      Thread.sleep(500)
       if (seq != probeSeq) return@Thread
       val ok = try {
-        val c = okhttp3.OkHttpClient.Builder()
-          .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
-          .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS).build()
-        // /version is the public probe; /health answers on relays older than 0.1.
+        val c = OkHttpClient.Builder()
+          .connectTimeout(5, TimeUnit.SECONDS)
+          .readTimeout(5, TimeUnit.SECONDS).build()
         listOf("/version", "/health").any { path ->
-          try { c.newCall(okhttp3.Request.Builder().url(base + path).build()).execute().use { it.isSuccessful } }
+          try { c.newCall(Request.Builder().url(base + path).build()).execute().use { it.isSuccessful } }
           catch (_: Exception) { false }
         }
       } catch (_: Exception) { false }
       runOnUiThread { if (seq == probeSeq) ui.enter = ui.enter.copy(probe = if (ok) Probe.Answered else Probe.NoAnswer) }
     }.start()
-  }
-
-  private fun requestBgExemption() {
-    try {
-      startActivity(Intent(
-        android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-        android.net.Uri.parse("package:$packageName")))
-    } catch (e: Exception) {
-      log("battery prompt failed: ${e.message}")
-      try {
-        startActivity(Intent(
-          android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-          android.net.Uri.parse("package:$packageName")))
-      } catch (e2: Exception) { log("settings failed: ${e2.message}") }
-    }
   }
 
   private fun shortHost(url: String?): String {
@@ -409,334 +235,317 @@ class MainActivity : AppCompatActivity(), Relay.Listener {
   private fun notificationsAllowed() = Build.VERSION.SDK_INT < 33 ||
     checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
-  /** Recompute everything the Compose screens show from Store + live link state. */
+  private fun filesAllowed() = Build.VERSION.SDK_INT < 30 || Environment.isExternalStorageManager()
+
+  private fun bgAllowed() = getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
+
   private fun syncUi() {
-    if (!::composeView.isInitialized) return
-    val bg = getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
-    ui.route = when {
-      !store.paired -> if (manualEntry) Route.EnterCode else Route.Unpaired
-      !store.setupDone -> Route.JustPaired
+    val route = when {
+      !store.paired -> when (navMode) {
+        Route.Scan -> Route.Scan
+        Route.EnterCode -> Route.EnterCode
+        else -> Route.Unpaired
+      }
+      navMode == Route.Settings -> Route.Settings
+      !store.setupDone -> Route.Setup
       else -> Route.Home
     }
-    ui.setup = SetupState(shortHost(store.relayHttp), notificationsAllowed(), bg, tried)
+    ui.route = route
+    back.isEnabled = navMode != null
+
+    val accOn = AppTools.isAccessibilityEnabled(this)
+    val filesOn = filesAllowed()
+    val notifListenerOn = AppTools.isNotificationListenerEnabled(this)
+    val camOn = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    ui.cameraGranted = camOn
+
+    ui.setup = SetupState(
+      relayHost = shortHost(store.relayHttp),
+      notifications = notificationsAllowed(),
+      background = bgAllowed(),
+      accessibility = accOn,
+      files = filesOn,
+      tried = tried,
+    )
+
     val relayLive = lastRelayState.startsWith("connected")
-    val shellLive = adb.serial != null
     val now = System.currentTimeMillis()
     ui.home = HomeState(
       name = store.name,
-      link = when { relayLive -> DotState.On; lastRelayState.startsWith("connecting") -> DotState.Wait; else -> DotState.Off },
+      link = when {
+        store.paused -> DotState.Off
+        relayLive -> DotState.On
+        lastRelayState.startsWith("connecting") -> DotState.Wait
+        else -> DotState.Off
+      },
       linkText = when {
-        relayLive && shellLive -> "Relay and shell connected"
-        relayLive -> "Relay connected, shell off"
+        store.paused -> "Agent paused"
+        relayLive -> "Connected to ${shortHost(store.relayHttp)}"
         else -> lastRelayState.replaceFirstChar { it.uppercase() }
       },
+      paused = store.paused,
+      accessibility = accOn,
+      files = filesOn,
+      notifications = notifListenerOn,
+      camera = camOn,
       recent = recent.map { (tool, t) ->
-        RecentJob(tool, if (now - t < 60_000) "Just now" else android.text.format.DateUtils
-          .getRelativeTimeSpanString(t, now, android.text.format.DateUtils.MINUTE_IN_MILLIS).toString())
+        RecentJob(
+          tool,
+          if (now - t < 60_000) "Just now"
+          else DateUtils.getRelativeTimeSpanString(t, now, DateUtils.MINUTE_IN_MILLIS).toString(),
+        )
       },
-      autoApprove = store.autoApprove,
-      selfUpdate = store.allowSelfUpdate,
     )
-    back.isEnabled = !composeView.isShown || ui.route == Route.EnterCode
+
+    val pkg = packageManager.getPackageInfo(packageName, 0)
+    val vc = if (Build.VERSION.SDK_INT >= 28) pkg.longVersionCode else @Suppress("DEPRECATION") pkg.versionCode.toLong()
+    val (shellStatus, shellAction) = shellSummary()
+    ui.settings = SettingsState(
+      name = store.name,
+      deviceId = store.deviceId ?: "",
+      relayUrl = store.relayHttp ?: "",
+      autoApprove = store.autoApprove,
+      blockedCount = store.blockedPackages.size,
+      shellStatus = shellStatus,
+      shellActionLabel = shellAction,
+      selfUpdate = store.allowSelfUpdate,
+      buildInfo = "v${pkg.versionName} (build $vc)",
+      logs = logLines.toList(),
+    )
+  }
+
+  private fun shellSummary(): Pair<String, String?> {
+    val devOn = try {
+      Settings.Global.getInt(contentResolver, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1
+    } catch (_: Exception) { true }
+    return when {
+      adb.serial != null -> "Connected · ${adb.serial} (shell-UID)" to null
+      !adb.serverPresent() -> "Server binary missing" to null
+      !devOn -> "Enable Developer Options in Android Settings first." to "Open Settings"
+      !adb.isWirelessOn() || !store.adbPaired -> "Optional Wi-Fi developer shell (logcat, dumpsys, pm)." to "Set up shell"
+      else -> "Paired · connecting…" to null
+    }
   }
 
   private val actions = object : PhoneUiActions {
-    override fun openCamera() {
-      try { startActivity(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)) }
-      catch (e: Exception) { log("no camera app: ${e.message}"); enterCode() }
+    override fun openScan() { navMode = Route.Scan; ui.scanError = null; syncUi() }
+    override fun enterCode() { navMode = Route.EnterCode; if (ui.enter.relay.isNotBlank()) scheduleProbe(ui.enter.relay); syncUi() }
+    override fun back() { navMode = null; ui.scanError = null; syncUi() }
+    override fun grantCamera() { reqCameraPerm.launch(Manifest.permission.CAMERA) }
+    override fun onQrScanned(raw: String) {
+      val parsed = PairingUri.parse(raw)
+      if (parsed == null) {
+        hapticReject()
+        ui.scanError = "That QR code is not a Phone MCP pairing link."
+        return
+      }
+      hapticConfirm()
+      navMode = Route.EnterCode
+      ui.enter = ui.enter.copy(relay = parsed.relay, code = parsed.code, error = null)
+      syncUi()
+      doPair(parsed.relay, parsed.code)
     }
-    override fun enterCode() { manualEntry = true; if (ui.enter.relay.isNotBlank()) scheduleProbe(ui.enter.relay); syncUi() }
-    override fun back() { manualEntry = false; syncUi() }
     override fun relayChanged(v: String) { ui.enter = ui.enter.copy(relay = v, error = null); scheduleProbe(v) }
     override fun codeChanged(v: String) { ui.enter = ui.enter.copy(code = v.uppercase(), error = null) }
     override fun paste() {
-      val cm = getSystemService(android.content.ClipboardManager::class.java)
-      val text = cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this@MainActivity)
-        ?.toString()?.trim() ?: return
-      val link = try { pairParams(Uri.parse(text)) } catch (_: Exception) { null }
-      if (link != null) {
-        ui.enter = ui.enter.copy(relay = link.second, code = link.first.uppercase(), error = null)
-        scheduleProbe(link.second)
-      } else codeChanged(text.take(16))
+      val cm = getSystemService(ClipboardManager::class.java)
+      val text = cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this@MainActivity)?.toString()?.trim() ?: return
+      val parsed = PairingUri.parse(text)
+      if (parsed != null) {
+        navMode = Route.EnterCode
+        ui.enter = ui.enter.copy(relay = parsed.relay, code = parsed.code, error = null)
+        scheduleProbe(parsed.relay)
+        syncUi()
+      } else if (ui.route == Route.EnterCode) {
+        codeChanged(text.take(16))
+      } else {
+        ui.scanError = "Clipboard does not contain a pairing link."
+      }
     }
     override fun connect() { if (!ui.enter.pending) doPair(ui.enter.relay, ui.enter.code) }
     override fun allowNotifications() {
-      if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 41)
-      else try {
-        startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-          .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName))
-      } catch (e: Exception) { log("notification settings failed: ${e.message}") }
+      if (Build.VERSION.SDK_INT >= 33) reqNotifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+      else startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
     }
     override fun allowBackground() = requestBgExemption()
+    override fun allowAccessibility() = openAccessibilitySettings()
+    override fun allowFiles() = openFilesSettings()
     override fun finishSetup() { store.setupDone = true; syncUi() }
-    override fun autoApprove(on: Boolean) { store.autoApprove = on; refreshAutoStatus(); log("auto-approve ${if (on) "ON" else "OFF"}"); syncUi() }
-    override fun selfUpdate(on: Boolean) { store.allowSelfUpdate = on; refreshAutoStatus(); log("agent self-update ${if (on) "ON" else "OFF"}"); syncUi() }
-    override fun openSettings() { composeView.visibility = View.GONE; showTab("settings"); syncUi() }
-    // Only these two, from real taps on the card's buttons, settle a job.
-    override fun approve(jobId: String) { ui.approval = null; cardActions.remove(jobId)?.first?.invoke() }
-    override fun reject(jobId: String) { ui.approval = null; cardActions.remove(jobId)?.second?.invoke() }
+    override fun togglePause() {
+      store.paused = !store.paused
+      relay.sendState()
+      app.ensureService()
+      syncUi()
+    }
+    override fun openAccessibilitySettings() {
+      try { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+      catch (_: Exception) { toast("Open Android Accessibility settings") }
+    }
+    override fun openFilesSettings() {
+      if (Build.VERSION.SDK_INT >= 30) {
+        try {
+          startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")))
+        } catch (_: Exception) {
+          startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+        }
+      }
+    }
+    override fun openNotificationListenerSettings() {
+      try { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+      catch (_: Exception) { toast("Open Notification access in Android Settings") }
+    }
+    override fun openCameraPermission() { reqCameraPerm.launch(Manifest.permission.CAMERA) }
+    override fun openSettings() { navMode = Route.Settings; syncUi() }
+    override fun saveName(name: String) {
+      store.name = name
+      log("name → $name")
+      syncUi()
+    }
+    override fun saveRelay(url: String) {
+      relay.disconnect()
+      store.relayHttp = PairingUri.normalizeRelay(url)
+      app.ensureService()
+      log("relay → ${store.relayHttp}")
+      syncUi()
+    }
+    override fun autoApprove(on: Boolean) { store.autoApprove = on; syncUi() }
+    override fun shellAction() = openWirelessAdbSettings()
+    override fun selfUpdate(on: Boolean) { store.allowSelfUpdate = on; syncUi() }
+    override fun unpair() {
+      try { adb.disconnectAll() } catch (_: Exception) {}
+      adb.drop(); ShellPairing.reset()
+      relay.disconnect(); store.clearRelay()
+      stopService(Intent(this@MainActivity, RelayService::class.java))
+      navMode = null
+      syncUi()
+    }
+    override fun forgetAll() {
+      try { adb.disconnectAll() } catch (_: Exception) {}
+      adb.drop()
+      try { java.io.File(filesDir, ".android").deleteRecursively() } catch (_: Exception) {}
+      ShellPairing.reset()
+      relay.disconnect(); store.clear()
+      stopService(Intent(this@MainActivity, RelayService::class.java))
+      navMode = null; recent.clear()
+      syncUi()
+    }
+    override fun approve(jobId: String) { hapticConfirm(); ui.approval = null; cardActions.remove(jobId)?.first?.invoke() }
+    override fun reject(jobId: String) { hapticReject(); ui.approval = null; cardActions.remove(jobId)?.second?.invoke() }
+  }
+
+  private fun openWirelessAdbSettings() {
+    val devOn = try {
+      Settings.Global.getInt(contentResolver, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1
+    } catch (_: Exception) { true }
+    if (!devOn) {
+      try { startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)) } catch (_: Exception) {}
+      return
+    }
+    try {
+      val i = Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
+      i.putExtra(":settings:fragment_args_key", "toggle_adb_wireless")
+      startActivity(i)
+    } catch (_: Exception) {
+      try { startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) } catch (_: Exception) {}
+    }
+  }
+
+  private fun requestBgExemption() {
+    try {
+      startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+    } catch (_: Exception) {
+      try { startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }
+      catch (_: Exception) {}
+    }
+  }
+
+  private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+
+  private fun capabilityOf(jobId: String): String {
+    val p = relay.jobParams(jobId) ?: return "photo.capture"
+    return when {
+      p.has("message") -> "human.handoff"
+      p.optString("action") == "delete" -> "files.op"
+      p.has("argv") -> "exec.run"
+      p.has("versionCode") -> "app.update"
+      else -> "photo.capture"
+    }
   }
 
   private fun showCard(card: ApprovalCard, onApprove: () -> Unit) {
     cardActions[card.jobId] = onApprove to {
-      relay.reject(card.jobId); cancelNotif(card.jobId); log("rejected ${card.jobId}")
+      relay.reject(card.jobId)
+      cancelNotif(card.jobId)
+      log("rejected ${card.jobId}")
     }
-    composeView.visibility = View.VISIBLE
     ui.approval = card
-    syncUi()
   }
 
-  private fun refreshAll() {
-    refreshIdentity()
-    advRelay.text = store.relayHttp ?: "—"
-    findViewById<EditText>(R.id.relayEdit).setText(store.relayHttp ?: "")
-    advDevice.text = store.deviceId ?: "—"
-    setupBox.visibility = if (store.paired) View.GONE else View.VISIBLE
-    statusBox.visibility = if (store.paired) View.VISIBLE else View.GONE
-    try {
-      val pkg = packageManager.getPackageInfo(packageName, 0)
-      val vc = if (android.os.Build.VERSION.SDK_INT >= 28) pkg.longVersionCode else @Suppress("DEPRECATION") pkg.versionCode.toLong()
-      findViewById<TextView>(R.id.buildInfo).text = "build $vc · ${pkg.versionName}"
-    } catch (_: Exception) {}
-    refreshBgStatus()
-    refreshAutoStatus()
-    if (!store.paired) lastJob.text = "no jobs yet"
-    renderHeader()
-    syncUi()
-  }
-
-  private fun refreshBgStatus() {
-    val pm = getSystemService(android.os.PowerManager::class.java)
-    val exempt = pm.isIgnoringBatteryOptimizations(packageName)
-    findViewById<TextView>(R.id.bgStatus).text =
-      if (exempt) "unrestricted ✓ — link survives the screen off"
-      else "restricted — tap Allow background"
-  }
-
-  private fun refreshAutoStatus() {
-    val on = store.autoApprove
-    findViewById<TextView>(R.id.autoStatus).text =
-      if (on) "ON — listed commands run without a tap, everything else asks"
-      else "OFF — every command asks"
-    findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.autoSwitch).apply {
-      if (isChecked != on) isChecked = on
-    }
-    val su = store.allowSelfUpdate
-    findViewById<TextView>(R.id.selfUpdateStatus).text =
-      if (su) "ON — the agent ships updates itself, no taps"
-      else "OFF — updates need your tap (check button or approval card)"
-    findViewById<com.google.android.material.switchmaterial.SwitchMaterial>(R.id.selfUpdateSwitch).apply {
-      if (isChecked != su) isChecked = su
-    }
-  }
-
-  private fun shellNote(s: String) {
-    findViewById<TextView>(R.id.shellStatus).text = s
-    log("shell: $s")
-  }
-
-  private fun refreshShellStatus() {
-    val devOn = try {
-      android.provider.Settings.Global.getInt(
-        contentResolver, android.provider.Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1
-    } catch (_: Exception) { true }
-    val wirelessOn = adb.isWirelessOn()
-    val settingsBtn = findViewById<Button>(R.id.shellSettings)
-    when {
-      adb.serial != null -> {
-        settingsBtn.visibility = View.GONE
-        ShellPairing.clear(this)
-        findViewById<TextView>(R.id.shellStatus).text = "connected — ${adb.serial} (shell-UID)"
-      }
-      !adb.serverPresent() -> {
-        settingsBtn.visibility = View.GONE
-        findViewById<TextView>(R.id.shellStatus).text =
-          "server binary missing — reinstall the app (update once more)"
-      }
-      !devOn -> {
-        settingsBtn.visibility = View.VISIBLE
-        settingsBtn.text = "0 · Enable developer options"
-        findViewById<TextView>(R.id.shellStatus).text =
-          "tap below → About phone → tap Build number 7×, then come back"
-      }
-      !wirelessOn || !store.adbPaired -> {
-        settingsBtn.visibility = View.VISIBLE
-        settingsBtn.text = "Set up shell"
-        findViewById<TextView>(R.id.shellStatus).text =
-          "opens wireless settings — tap “Pair device with pairing code”, then reply the code in the notification"
-      }
-      else -> {
-        settingsBtn.visibility = View.GONE
-        findViewById<TextView>(R.id.shellStatus).text = "paired — connecting…"
-      }
-    }
-    renderHeader()
-  }
-
-  /** Grant ourselves WRITE_SECURE_SETTINGS through our own shell (one-time). */
-  private fun selfGrantShell() {
-    try {
-      if (packageManager.checkPermission(
-          "android.permission.WRITE_SECURE_SETTINGS", packageName) ==
-          PackageManager.PERMISSION_GRANTED) return
-      val r = adb.exec(listOf("pm", "grant", packageName,
-        "android.permission.WRITE_SECURE_SETTINGS"), 15)
-      Log.d("phone", "self-grant: ${r.exit}")
-    } catch (e: Exception) { Log.d("phone", "self-grant fail: $e") }
-  }
-
-  private var lastShellNote = ""
-
-  private fun shellNoteState(s: String) {
-    if (s == lastShellNote) return
-    lastShellNote = s
-    shellNote(s)
-  }
-
-  private fun showTab(name: String) {
-    currentTab = name
-    findViewById<LinearLayout>(R.id.tabStatusBody).visibility = if (name == "status") View.VISIBLE else View.GONE
-    findViewById<LinearLayout>(R.id.tabShellBody).visibility = if (name == "shell") View.VISIBLE else View.GONE
-    findViewById<LinearLayout>(R.id.tabSettingsBody).visibility = if (name == "settings") View.VISIBLE else View.GONE
-    for ((id, key) in listOf(R.id.tabStatus to "status", R.id.tabShell to "shell", R.id.tabSettings to "settings")) {
-      findViewById<Button>(id).apply {
-        val sel = key == name
-        alpha = if (sel) 1f else 0.55f
-        setTypeface(typeface, if (sel) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
-        setTextColor(if (sel) 0xFF3B82F6.toInt() else 0xFF9AA3B2.toInt())
-      }
-    }
-  }
-
-  override fun onResume() {
-    super.onResume()
-    (application as PhoneApp).uiListener = this
-    refreshAll()
-    // Live pair-dialog status; the service owns posting the notification.
-    if (adb.serial == null) {
-      adb.watchPorts { _, pair ->
-        runOnUiThread {
-          if (pair.isNotEmpty() && !store.adbPaired) {
-            store.adbPairPort = pair.first()
-            shellNoteState("pair dialog open — reply the 6-digit code in the notification")
-          } else if (!store.adbPaired) {
-            shellNoteState(refreshShellHint())
-          }
-        }
-      }
-    } else {
-      ShellPairing.clear(this)
-    }
-  }
-
-  private fun refreshShellHint(): String = when {
-    adb.isWirelessOn() -> "open “Pair device with pairing code” in Settings"
-    else -> "enable wireless debugging first"
-  }
-
-  override fun onPause() {
-    adb.unwatch()
-    super.onPause()
-  }
-
-  private fun refreshIdentity() {
-    identity.text = "${store.name} is how agents call this phone."
-  }
-
-  override fun onDestroy() {
-    val app = application as PhoneApp
-    if (app.uiListener === this) app.uiListener = null
-    super.onDestroy()
-  }
-
-  // ---- approval surface (service posts the notification; we show the card) ----
   override fun onApproval(jobId: String, capability: String) {
     runOnUiThread {
-      // service may have settled it headlessly (auto-approve / self-update) — don't double-run
-      if (!relay.pendingApproval(jobId)) {
-        log("job $jobId settled in background")
-        return@runOnUiThread
-      }
-      showApproval(jobId, capability)
-    }
-  }
-
-  private fun showApproval(jobId: String, capability: String) {
-    when (capability) {
-      "exec.run" -> showExecApproval(jobId)
-      "app.update" -> showUpdateApproval(jobId)
-      else -> showPhotoApproval(jobId)
-    }
-  }
-
-  private fun showUpdateApproval(jobId: String) {
-    val p = relay.jobParams(jobId)
-    val v = p?.optString("versionName", "?") ?: "?"
-    val notes = p?.optString("notes", "") ?: ""
-    val rows = mutableListOf("Tool" to "app.update", "Version" to "v$v")
-    if (notes.isNotBlank()) rows += "Notes" to notes
-    showCard(ApprovalCard(jobId, "Your agent wants to update this app.",
-      "It installs, then the app restarts.", rows, "Update App", false)) {
-      val app = application as PhoneApp
-      SelfUpdate(this, relay, app.adb, store).run(jobId, object : SelfUpdate.Sink {
-        override fun note(s: String) = runOnUiThread { log(s) }
-        override fun progress(pct: Int) = runOnUiThread {
-          findViewById<ProgressBar>(R.id.updateProgress)?.apply {
-            visibility = View.VISIBLE; progress = pct
+      if (!relay.pendingApproval(jobId)) return@runOnUiThread
+      when (capability) {
+        "human.handoff" -> {
+          val msg = relay.jobParams(jobId)?.optString("message", "Complete this step on your phone.") ?: "Complete this step on your phone."
+          showCard(ApprovalCard(jobId, "Agent needs you.", msg, listOf("Tool" to "human.handoff"), "Continue", false)) {
+            cancelNotif(jobId)
+            relay.approve(jobId, JSONObject().put("continued", true))
           }
         }
-      })
+        "files.op" -> {
+          val path = relay.jobParams(jobId)?.optString("path", "") ?: ""
+          showCard(ApprovalCard(jobId, "Delete this file?", "This cannot be undone.", listOf("Tool" to "files.op", "Path" to path), "Delete file", false)) {
+            cancelNotif(jobId)
+            Thread {
+              try {
+                val res = relay.deleteFile(relay.jobParams(jobId) ?: JSONObject())
+                relay.approve(jobId, res)
+              } catch (e: Exception) {
+                relay.reject(jobId, e.message ?: "delete failed")
+              }
+            }.start()
+          }
+        }
+        "exec.run" -> {
+          val argv = relay.jobParams(jobId)?.optJSONArray("argv")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList()
+          val tier = if (adb.serial != null) "shell-UID" else "app sandbox"
+          showCard(ApprovalCard(jobId, "Run a command?", "Runs as $tier.", listOf("Tool" to "exec.run", "Command" to argv.joinToString(" ")), "Run command", false)) {
+            ExecRunner(this, relay, adb, store).runExec(jobId, argv, object : ExecRunner.Sink {
+              override fun note(s: String) = runOnUiThread { log(s) }
+            })
+          }
+        }
+        "app.update" -> {
+          val v = relay.jobParams(jobId)?.optString("versionName", "?") ?: "?"
+          showCard(ApprovalCard(jobId, "Update Orkestrate Phone?", "Installs v$v and restarts.", listOf("Tool" to "app.update", "Version" to "v$v"), "Update app", false)) {
+            SelfUpdate(this, relay, adb, store).run(jobId, object : SelfUpdate.Sink {
+              override fun note(s: String) = runOnUiThread { log(s) }
+              override fun progress(pct: Int) {}
+            })
+          }
+        }
+        else -> {
+          val p = relay.jobParams(jobId)
+          pendingMaxPx = p?.optInt("maxPx", 1280) ?: 1280
+          pendingQuality = p?.optInt("quality", 80) ?: 80
+          showCard(ApprovalCard(jobId, "Take a photo?", "Nothing is captured until you take it.", listOf("Tool" to "photo.capture", "Size" to "$pendingMaxPx px, JPEG"), "Open camera", true)) {
+            startShot(jobId)
+          }
+        }
+      }
     }
-  }
-
-  private fun showPhotoApproval(jobId: String) {
-    showCard(ApprovalCard(jobId, "Your agent wants a photo.", "Nothing is captured until you take it.",
-      listOf("Tool" to "photo.capture", "Size" to "1280 px, JPEG"), "Open camera", true)) { startShot(jobId) }
-  }
-
-  private fun showExecApproval(jobId: String) {
-    val argv = relay.jobParams(jobId)?.optJSONArray("argv")
-      ?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList()
-    val tier = if ((application as PhoneApp).adb.serial != null) "shell-UID" else "app sandbox"
-    showCard(ApprovalCard(jobId, "Your agent wants to run a command.", "It runs exactly this, as $tier.",
-      listOf("Tool" to "exec.run", "Command" to argv.joinToString(" ")), "Run Command", false)) {
-      runner().runExec(jobId, argv, object : ExecRunner.Sink {
-        override fun note(s: String) = runOnUiThread { log(s) }
-      })
-    }
-  }
-
-  private fun runner(): ExecRunner {
-    val app = application as PhoneApp
-    return ExecRunner(this, relay, app.adb, store)
-  }
-
-  private fun cancelNotif(jobId: String) {
-    getSystemService(NotificationManager::class.java).cancel(jobId.hashCode())
   }
 
   private fun startShot(jobId: String) {
     if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-      pendingJob = jobId
-      requestPermissions(arrayOf(Manifest.permission.CAMERA), 42)
+      pendingPhotoJob = jobId
+      reqCameraPerm.launch(Manifest.permission.CAMERA)
       return
     }
     launchCamera(jobId)
   }
 
-  override fun onRequestPermissionsResult(rc: Int, perms: Array<out String>, res: IntArray) {
-    super.onRequestPermissionsResult(rc, perms, res)
-    if (rc == 41) { syncUi(); return }
-    if (rc == 42) {
-      val id = pendingJob ?: return
-      pendingJob = null
-      if (res.firstOrNull() == PackageManager.PERMISSION_GRANTED) launchCamera(id)
-      else { relay.reject(id, "camera denied"); cancelNotif(id); log("camera denied") }
-    }
-  }
-
   private fun launchCamera(jobId: String) {
-    pendingMaxPx = 1280; pendingQuality = 80
     val values = ContentValues().apply {
       put(MediaStore.Images.Media.DISPLAY_NAME, "phone_${System.currentTimeMillis()}.jpg")
       put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
@@ -744,35 +553,9 @@ class MainActivity : AppCompatActivity(), Relay.Listener {
     }
     val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
     if (uri == null) { relay.reject(jobId, "camera store failed"); cancelNotif(jobId); return }
-    pendingShot = uri; pendingJob = jobId
-    val cam = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-      .putExtra(MediaStore.EXTRA_OUTPUT, uri)
-      .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-    val resolved = packageManager.queryIntentActivities(cam, PackageManager.MATCH_DEFAULT_ONLY)
-    if (resolved.isEmpty()) { relay.reject(jobId, "no camera app"); cancelNotif(jobId); return }
-    startActivityForResult(cam, 43)
-  }
-
-  @Deprecated("framework activity result")
-  override fun onActivityResult(rc: Int, resultCode: Int, data: Intent?) {
-    super.onActivityResult(rc, resultCode, data)
-    if (rc != 43) return
-    val id = pendingJob ?: return
-    val uri = pendingShot
-    pendingJob = null; pendingShot = null
-    cancelNotif(id)
-    if (resultCode != RESULT_OK || uri == null) {
-      relay.reject(id, "shot cancelled"); log("shot cancelled"); return
-    }
-    try {
-      val dataOut = downscale(uri, pendingMaxPx, pendingQuality)
-      relay.approve(id, org.json.JSONObject()
-        .put("mime", "image/jpeg").put("bytes_b64", dataOut))
-      log("approved $id (${dataOut.length / 1024} KB b64)")
-    } catch (e: Exception) {
-      Log.d("phone", "shot fail: $e")
-      relay.reject(id, "shot failed: ${e.message}"); log("shot failed")
-    }
+    pendingShot = uri
+    pendingPhotoJob = jobId
+    takePicture.launch(uri)
   }
 
   private fun downscale(uri: Uri, maxPx: Int, quality: Int): String {
@@ -783,7 +566,6 @@ class MainActivity : AppCompatActivity(), Relay.Listener {
     val opts = BitmapFactory.Options().apply { inSampleSize = sample }
     var bmp = contentResolver.openInputStream(uri)!!.use { BitmapFactory.decodeStream(it, null, opts) }
       ?: throw IllegalStateException("decode failed")
-    // exact scale to fit maxPx
     val scale = minOf(1f, maxPx / maxOf(bmp.width, bmp.height).toFloat())
     if (scale < 1f) {
       val w = (bmp.width * scale).toInt(); val h = (bmp.height * scale).toInt()
@@ -792,222 +574,35 @@ class MainActivity : AppCompatActivity(), Relay.Listener {
       bmp = s
     }
     val out = ByteArrayOutputStream()
-    bmp.compress(Bitmap.CompressFormat.JPEG, quality, out)
+    bmp.compress(Bitmap.CompressFormat.JPEG, quality.coerceIn(30, 95), out)
     bmp.recycle()
-    contentResolver.delete(uri, null, null) // keep the glass clean; bytes already flow to the agent
+    contentResolver.delete(uri, null, null)
     return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
   }
 
-  @Volatile private var updating = false
-
-  // ---- self-update: version check + PackageInstaller session ----
-  private fun checkUpdate() {
-    val base = store.relayHttp ?: run { updateDone("not paired"); return }
-    val token = store.token ?: run { updateDone("not paired"); return }
-    updateNote("checking…")
-    Thread {
-      try {
-        val client = okhttp3.OkHttpClient.Builder()
-          .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-          .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-          .build()
-        var lastErr = "unknown"
-        for (attempt in 1..3) {
-          try {
-            if (tryUpdate(client, base, token)) return@Thread
-            else return@Thread // definitive answer (up to date), no retry
-          } catch (e: Exception) {
-            lastErr = e.message ?: "failed"
-            Log.d("phone", "update attempt $attempt: $e")
-            updateNote("retrying… ($attempt/3)")
-            Thread.sleep(2000)
-          }
-        }
-        updateNote("check failed: $lastErr")
-      } finally {
-        runOnUiThread {
-          updating = false
-          findViewById<Button>(R.id.updateBtn)?.isEnabled = true
-          findViewById<ProgressBar>(R.id.updateProgress)?.visibility = View.GONE
-        }
-      }
-    }.start()
+  private fun cancelNotif(jobId: String) {
+    getSystemService(android.app.NotificationManager::class.java).cancel(jobId.hashCode())
   }
 
-  private fun updateDone(s: String) {
-    updateNote(s)
-    updating = false
-    findViewById<Button>(R.id.updateBtn)?.isEnabled = true
+  override fun onState(s: String) {
+    runOnUiThread { lastRelayState = s; log(s); syncUi() }
   }
 
-  /** Returns true if an update flow completed; false if already up to date. Throws on transport failure. */
-  private fun tryUpdate(client: okhttp3.OkHttpClient, base: String, token: String): Boolean {
-      val req = okhttp3.Request.Builder()
-        .url(base.trimEnd('/') + "/app/version")
-        .header("Authorization", "Bearer $token")
-        .build()
-      client.newCall(req).execute().use { res ->
-        val body = res.body?.string() ?: ""
-        if (!res.isSuccessful) { updateNote("check failed: ${res.code}"); return false }
-        val v = org.json.JSONObject(body)
-        val latest = v.getInt("versionCode")
-        val mine = packageManager.getPackageInfo(packageName, 0).let {
-          if (android.os.Build.VERSION.SDK_INT >= 28) it.longVersionCode.toInt() else @Suppress("DEPRECATION") it.versionCode
-        }
-        if (latest <= mine) { updateNote("up to date (${v.optString("versionName")})"); return false }
-        val notes = v.optString("notes", "")
-        updateNote("downloading ${v.optString("versionName")}${if (notes.isNotBlank()) " — $notes" else ""}…")
-        downloadAndInstall(client, base, token)
-        return true
+  override fun onJob(desc: String) {
+    runOnUiThread {
+      tried = true
+      recent.addFirst(desc.substringBefore(" · ") to System.currentTimeMillis())
+      while (recent.size > 8) recent.removeLast()
+      syncUi()
     }
   }
 
-  private fun updateNote(s: String) = runOnUiThread {
-    findViewById<TextView>(R.id.updateStatus).text = s
-    log("update: $s")
+  override fun onLog(s: String) {
+    runOnUiThread { log(s) }
   }
-
-  /** Throws on transport failure so the caller retries; install problems are reported, not retried. */
-  private fun downloadApk(client: okhttp3.OkHttpClient, base: String, token: String): java.io.File? {
-    val req = okhttp3.Request.Builder()
-      .url(base.trimEnd('/') + "/app.apk")
-      .header("Authorization", "Bearer $token")
-      .build()
-    val tmp = java.io.File(cacheDir, "update.apk")
-    client.newCall(req).execute().use { res ->
-      if (!res.isSuccessful) { updateNote("download: ${res.code}"); return null }
-      val total = res.body!!.contentLength()
-      runOnUiThread {
-        findViewById<ProgressBar>(R.id.updateProgress)?.apply {
-          visibility = View.VISIBLE; max = 100; progress = 0
-        }
-      }
-      var done = 0L
-      var lastPct = -1
-      res.body!!.byteStream().use { input ->
-        tmp.outputStream().use { out ->
-          val buf = ByteArray(32 * 1024)
-          while (true) {
-            val n = input.read(buf)
-            if (n < 0) break
-            out.write(buf, 0, n)
-            done += n
-            if (total > 0) {
-              val pct = (done * 100 / total).toInt()
-              if (pct != lastPct) {
-                lastPct = pct
-                runOnUiThread {
-                  findViewById<ProgressBar>(R.id.updateProgress)?.progress = pct
-                }
-              }
-            }
-          }
-        }
-      }
-      runOnUiThread {
-        findViewById<ProgressBar>(R.id.updateProgress)?.visibility =
-          if (total > 0) View.GONE else View.VISIBLE
-        if (total <= 0) findViewById<ProgressBar>(R.id.updateProgress)?.isIndeterminate = true
-      }
-    }
-    return tmp
-  }
-
-  private fun downloadAndInstall(client: okhttp3.OkHttpClient, base: String, token: String) {
-    val tmp = downloadApk(client, base, token) ?: return
-    try {
-      updateNote("downloaded ${(tmp.length() / 1024)} KB, installing…")
-      val statusFilter = IntentFilter("space.orkestrate.phone.UPDATE_STATUS")
-      val statusReceiver = object : android.content.BroadcastReceiver() {
-        override fun onReceive(c: android.content.Context?, i: Intent?) {
-          val st = i?.getIntExtra(android.content.pm.PackageInstaller.EXTRA_STATUS, -999)
-          updateNote("install status=$st ${i?.getStringExtra(android.content.pm.PackageInstaller.EXTRA_STATUS_MESSAGE) ?: ""}")
-          if (st == android.content.pm.PackageInstaller.STATUS_PENDING_USER_ACTION) {
-            val confirm = if (android.os.Build.VERSION.SDK_INT >= 33) {
-              i?.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
-            } else {
-              @Suppress("DEPRECATION") i?.getParcelableExtra(Intent.EXTRA_INTENT)
-            }
-            try {
-              confirm?.let { startActivity(it) } ?: updateNote("installer UI missing")
-            } catch (e: Exception) { updateNote("installer UI failed: ${e.message}") }
-          } else if (st != null && st != android.content.pm.PackageInstaller.STATUS_SUCCESS) {
-            try { unregisterReceiver(this) } catch (_: Exception) {}
-          } else if (st == android.content.pm.PackageInstaller.STATUS_SUCCESS) {
-            updateNote("installed — reopen the app")
-            try { unregisterReceiver(this) } catch (_: Exception) {}
-          }
-        }
-      }
-      if (android.os.Build.VERSION.SDK_INT >= 33) {
-        registerReceiver(statusReceiver, statusFilter, android.content.Context.RECEIVER_NOT_EXPORTED)
-      } else {
-        @Suppress("DEPRECATION") registerReceiver(statusReceiver, statusFilter)
-      }
-      val pi = packageManager.packageInstaller
-      val params = android.content.pm.PackageInstaller.SessionParams(
-        android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL)
-      val id = pi.createSession(params)
-      pi.openSession(id).use { session ->
-        tmp.inputStream().use { input ->
-          session.openWrite("app", 0, tmp.length()).use { out ->
-            input.copyTo(out)
-            session.fsync(out)
-          }
-        }
-        val piFlags = if (android.os.Build.VERSION.SDK_INT >= 31) {
-          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-        } else {
-          PendingIntent.FLAG_UPDATE_CURRENT
-        }
-        // Explicit intent (setPackage): Android 14+ throws on MUTABLE + implicit.
-        // Mutable: PackageInstaller writes EXTRA_STATUS back (immutable rejected on 35+).
-        val statusIntent = Intent("space.orkestrate.phone.UPDATE_STATUS").apply {
-          setPackage(packageName)
-        }
-        val intent = PendingIntent.getBroadcast(this, id, statusIntent, piFlags)
-        session.commit(intent.intentSender)
-      }
-      tmp.delete()
-      // system shows the install prompt; result lands in the broadcast above
-    } catch (e: Exception) {
-      Log.d("phone", "install fail: $e")
-      updateNote("install failed: ${e.message}")
-    }
-  }
-
-  // ---- Relay.Listener ----
-  override fun onState(s: String) = runOnUiThread {
-    lastRelayState = s
-    renderHeader()
-    syncUi()
-  }
-
-  /** One header, both links: relay state + shell state, never one masquerading as the other. */
-  private fun renderHeader() {
-    val relayLive = lastRelayState.startsWith("connected")
-    val shellLive = adb.serial != null
-    dot.setBackgroundColor(if (relayLive || shellLive) 0xFF4ADE80.toInt() else 0xFF6B7280.toInt())
-    status.text = when {
-      relayLive && shellLive -> "connected — relay + shell"
-      relayLive -> "connected — relay (shell off)"
-      shellLive -> "shell live — relay ${lastRelayState}"
-      else -> lastRelayState
-    }
-  }
-
-  override fun onJob(desc: String) = runOnUiThread {
-    lastJob.text = desc
-    recent.addFirst(desc.substringBefore(" · ") to System.currentTimeMillis())
-    while (recent.size > 3) recent.removeLast()
-    tried = true
-    syncUi()
-  }
-
-  override fun onLog(s: String) = runOnUiThread { log(s) }
 
   private fun log(s: String) {
-    logLines.addLast(s); while (logLines.size > 30) logLines.removeFirst()
-    logView.text = logLines.joinToString("\n")
+    logLines.addFirst(s)
+    while (logLines.size > 40) logLines.removeLast()
   }
 }

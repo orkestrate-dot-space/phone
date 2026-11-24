@@ -5,9 +5,9 @@ Mobile surface of the suite: MCP server + relay (Bun, `desktop/`) and the
 Android companion app (`app/`). The phone dials out; nothing listens on it.
 
 ## Build & verify (no guessing, no memory)
-- Desktop: `bun src/index.ts --serve` (port `PHONE_PORT`, default 19877).
+- Desktop: `bun src/index.ts --serve` (port `PHONE_PORT`, default 19877), `bun test` in `desktop/`.
   MCP mode = same binary over stdio; logs go to stderr, never stdout.
-- App: `gradle :app:assembleDebug` with `JAVA_HOME=<mise java>` and
+- App: `gradle :app:assembleDebug :app:assembleRelease :app:testDebugUnitTest` with `JAVA_HOME=<mise java>` and
   `ANDROID_HOME=~/.local/share/android-sdk`. Verify with
   `aapt dump badging` (versionCode must match `dist/version.json`).
 - Site: static pages in `site/` (`bun site/build.ts`), installer `site/phone/install`, agent doc `site/phone/agent.md`. Handed to the orkestrate repo, never edited there from here. Test the installer in a sandbox (`PHONE_HOME`, `PHONE_PORT`, `PHONE_UNIT`, `PHONE_SRC`, `XDG_BIN_HOME`), never against the real unit.

@@ -87,6 +87,41 @@ object OrkIcons {
   val alert by lazy {
     lucide("circle-alert", "M22 12a10 10 0 1 1-20 0a10 10 0 1 1 20 0", "M12 8v4", "M12 16h.01")
   }
+  val qrCode by lazy {
+    lucide(
+      "qr-code",
+      "M3 3h5v5H3z", "M16 3h5v5h-5z", "M3 16h5v5H3z",
+      "M16 16h2v2h-2z", "M19 19h2v2h-2z", "M16 21h2", "M21 16v2",
+      "M12 7v3a2 2 0 0 1-2 2H7", "M12 3h.01", "M12 16v.01", "M3 12h.01", "M21 12h.01",
+    )
+  }
+  val eye by lazy {
+    lucide("eye", "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z", "M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0")
+  }
+  val folder by lazy {
+    lucide("folder", "M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z")
+  }
+  val bell by lazy {
+    lucide("bell", "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9", "M10.3 21a1.94 1.94 0 0 0 3.4 0")
+  }
+  val shield by lazy {
+    lucide("shield", "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10")
+  }
+  val pause by lazy {
+    lucide("pause", "M10 4H6v16h4V4z", "M18 4h-4v16h4V4z")
+  }
+  val play by lazy {
+    lucide("play", "M6 3l14 9-14 9V3z")
+  }
+  val terminal by lazy {
+    lucide("terminal", "m4 17 6-6-6-6", "M12 19h8")
+  }
+  val chevronRight by lazy {
+    lucide("chevron-right", "m9 18 6-6-6-6")
+  }
+  val trash by lazy {
+    lucide("trash-2", "M3 6h18", "M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6", "M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2")
+  }
 }
 
 /** Two-tone heading: the lead in ink, the elaboration at 50%. */

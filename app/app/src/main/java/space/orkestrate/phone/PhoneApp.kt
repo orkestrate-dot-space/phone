@@ -18,8 +18,8 @@ class PhoneApp : Application() {
   override fun onCreate() {
     super.onCreate()
     store = Store(this)
-    relay = Relay(this, store)
     adb = AdbShell(this)
+    relay = Relay(this, store, adb)
   }
 
   fun ensureService() {

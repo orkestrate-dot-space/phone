@@ -1,27 +1,27 @@
 package space.orkestrate.phone
 
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
-import android.os.BatteryManager
 import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
- * v0 relay client: pairs once, holds one WS, executes jobs.
+ * Relay client: pairs once, holds one outbound WebSocket, executes jobs.
  * Transport rule (SPEC): the phone always dials out; the relay never calls in.
- * Approval rule (SPEC): gated capabilities complete only after a real
- * on-glass tap. No code path auto-approves — ever.
+ * Approval rule (SPEC): gated capabilities complete only after a real on-glass tap.
  */
-class Relay(private val ctx: Context, private val store: Store) {
-
+class Relay(
+  private val ctx: Context,
+  private val store: Store,
+  private val adb: AdbShell,
+) {
   interface Listener {
     fun onState(s: String)
     fun onJob(desc: String)
@@ -34,40 +34,46 @@ class Relay(private val ctx: Context, private val store: Store) {
   @Volatile private var ws: WebSocket? = null
   @Volatile private var wantUp = false
 
+  private val fileStore = FileStore()
+
   /** jobId -> (socket, job) for jobs awaiting the human tap. */
   private val approvals = mutableMapOf<String, Pair<WebSocket, JSONObject>>()
 
-  private val GATED = setOf("photo.capture", "exec.run", "app.update")
+  private val ALWAYS_GATED = setOf("photo.capture", "human.handoff", "exec.run", "app.update")
 
   fun pendingApproval(id: String): Boolean = synchronized(approvals) { approvals.containsKey(id) }
 
-  /** Params of a gated job, for the approval card. */
   fun jobParams(id: String): JSONObject? = synchronized(approvals) {
     approvals[id]?.second?.optJSONObject("params")
   }
 
   private val http = OkHttpClient.Builder()
     .connectTimeout(10, TimeUnit.SECONDS)
-    .readTimeout(0, TimeUnit.MILLISECONDS) // long-lived WS
-    .pingInterval(20, TimeUnit.SECONDS) // WS-protocol keepalive: survives carrier NAT timeouts
+    .readTimeout(0, TimeUnit.MILLISECONDS)
+    .pingInterval(20, TimeUnit.SECONDS)
     .build()
 
-  // ---- pairing: POST {relay}/pair/{code} -> {deviceId, token} ----
+  fun sendState() {
+    val w = ws ?: return
+    val frame = JSONObject()
+      .put("t", "state")
+      .put("paused", store.paused)
+      .put("permissions", AppTools.permissionsMap(ctx, adb))
+    try { w.send(frame.toString()) } catch (_: Exception) {}
+  }
+
   fun pair(relayHttp: String, code: String, cb: (ok: Boolean, msg: String) -> Unit) {
     Thread {
       try {
         val base = relayHttp.trim().trimEnd('/')
         val url = "$base/pair/${code.trim().uppercase()}"
-        Log.d("phone", "pair POST $url")
         val req = Request.Builder()
           .url(url)
           .post(okhttp3.RequestBody.create(null, "{\"name\":${JSONObject.quote(store.name)}}".toByteArray()))
           .header("Content-Type", "application/json")
           .build()
-        Log.d("phone", "pair exec…")
         http.newCall(req).execute().use { res ->
           val body = res.body?.string() ?: ""
-          Log.d("phone", "pair -> ${res.code} $body")
           if (!res.isSuccessful) { cb(false, "pair ${res.code}: $body"); return@Thread }
           val j = JSONObject(body)
           store.relayHttp = base
@@ -75,11 +81,13 @@ class Relay(private val ctx: Context, private val store: Store) {
           store.token = j.getString("token")
           cb(true, "paired as ${store.deviceId}")
         }
-      } catch (e: Exception) { Log.d("phone", "pair fail: $e"); cb(false, "pair failed: ${e.message}") }
+      } catch (e: Exception) {
+        Log.d("phone", "pair fail: $e")
+        cb(false, "pair failed: ${e.message}")
+      }
     }.start()
   }
 
-  // ---- connection holder with backoff ----
   fun connect() {
     if (wantUp) return
     wantUp = true
@@ -90,16 +98,12 @@ class Relay(private val ctx: Context, private val store: Store) {
         try {
           listener?.onState("connecting…")
           dial()
-          // Only reset the backoff for a connection that actually lived:
-          // fast post-handshake closes (dead route, tunnel flap) must NOT
-          // reset it, or redial hammers every second forever.
           if (android.os.SystemClock.elapsedRealtime() - t0 > 30000) wait = 1000L
         } catch (e: Exception) {
           Log.d("phone", "dial: $e")
           listener?.onLog("dial: ${e.message}")
         }
         if (!wantUp) break
-        Log.d("phone", "redial in ${wait}ms")
         listener?.onState("retry in ${wait / 1000}s")
         Thread.sleep(wait)
         wait = minOf(wait * 2, 30000L)
@@ -131,32 +135,52 @@ class Relay(private val ctx: Context, private val store: Store) {
           if (android.os.Build.VERSION.SDK_INT >= 28) it.longVersionCode.toInt()
           else @Suppress("DEPRECATION") it.versionCode
         }
+        val caps = JSONArray()
+          .put("device.info")
+          .put("battery.get")
+          .put("screen.observe")
+          .put("screen.act")
+          .put("apps.manage")
+          .put("files.op")
+          .put("notifications.op")
+          .put("clipboard.op")
+          .put("human.handoff")
+          .put("photo.capture")
+          .put("exec.run")
+          .put("app.update")
         val hello = JSONObject()
           .put("t", "hello")
           .put("deviceId", store.deviceId)
           .put("name", store.name)
           .put("appVersion", vcode)
-          .put("caps", org.json.JSONArray().put("battery.get").put("photo.capture").put("exec.run").put("app.update"))
+          .put("paused", store.paused)
+          .put("permissions", AppTools.permissionsMap(ctx, adb))
+          .put("caps", caps)
         w.send(hello.toString())
       }
+
       override fun onMessage(w: WebSocket, text: String) {
         try { onFrame(w, JSONObject(text)) } catch (e: Exception) {
           listener?.onLog("bad frame: ${e.message}")
         }
       }
+
       override fun onClosed(w: WebSocket, code: Int, reason: String) { gone.countDown() }
       override fun onFailure(w: WebSocket, t: Throwable, r: Response?) {
         Log.d("phone", "ws fail: $t")
         listener?.onLog("ws: ${t.message}")
         gone.countDown()
       }
-      override fun onClosing(w: WebSocket, code: Int, reason: String) {
-        Log.d("phone", "ws closing $code $reason")
-      }
     })
     ws = socket
-    gone.await() // blocks until close/failure; connect() loop redials
+    gone.await()
     ws = null
+  }
+
+  private fun isGated(cap: String, params: JSONObject?): Boolean {
+    if (cap in ALWAYS_GATED) return true
+    if (cap == "files.op" && params?.optString("action") == "delete") return true
+    return false
   }
 
   private fun onFrame(w: WebSocket, m: JSONObject) {
@@ -167,8 +191,15 @@ class Relay(private val ctx: Context, private val store: Store) {
         val job = m.getJSONObject("job")
         val id = job.getString("id")
         val cap = job.getString("capability")
+        val params = job.optJSONObject("params") ?: JSONObject()
         listener?.onJob("$cap · $id")
-        if (cap in GATED) {
+
+        if (store.paused && cap != "device.info" && cap != "battery.get") {
+          w.send(result(id, false, null, "paused-by-user"))
+          return
+        }
+
+        if (isGated(cap, params)) {
           synchronized(approvals) {
             if (approvals.isNotEmpty()) {
               w.send(result(id, false, null, "busy: another approval pending"))
@@ -176,15 +207,16 @@ class Relay(private val ctx: Context, private val store: Store) {
             }
             approvals[id] = w to job
           }
-          Log.d("phone", "approval needed: $id")
           listener?.onApproval(id, cap)
-        } else Thread {
-          try {
-            w.send(result(id, true, exec(job), null))
-          } catch (e: Exception) {
-            w.send(result(id, false, null, e.message ?: "failed"))
-          }
-        }.start()
+        } else {
+          Thread {
+            try {
+              w.send(result(id, true, execUngated(cap, params), null))
+            } catch (e: Exception) {
+              w.send(result(id, false, null, e.message ?: "failed"))
+            }
+          }.start()
+        }
       }
     }
   }
@@ -208,22 +240,36 @@ class Relay(private val ctx: Context, private val store: Store) {
     w.send(result(id, false, null, why))
   }
 
-  // ---- capability executor (ungated only) ----
-  private fun exec(job: JSONObject): JSONObject {
-    when (job.getString("capability")) {
-      "battery.get" -> {
-        val b = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        val level = b?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-        val scale = b?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
-        val status = b?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-        return JSONObject()
-          .put("level", if (level >= 0) (level * 100 / scale) else -1)
-          .put("charging", status == BatteryManager.BATTERY_STATUS_CHARGING ||
-            status == BatteryManager.BATTERY_STATUS_FULL)
-          .put("voltageMv", b?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1) ?: -1)
-          .put("tempC", ((b?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1)) / 10.0)
+  fun deleteFile(params: JSONObject): JSONObject = fileStore.exec(params)
+
+  private fun execUngated(cap: String, params: JSONObject): JSONObject {
+    return when (cap) {
+      "battery.get" -> AppTools.batteryInfo(ctx)
+      "device.info" -> AppTools.deviceInfo(ctx, store, adb)
+      "screen.observe" -> {
+        val svc = PhoneAccessibilityService.instance
+          ?: throw IllegalStateException("accessibility-permission-required")
+        svc.observe(
+          store = store,
+          screenshot = params.optBoolean("screenshot", false),
+          maxPx = params.optInt("maxPx", 1080),
+          quality = params.optInt("quality", 75),
+        )
       }
+      "screen.act" -> {
+        val svc = PhoneAccessibilityService.instance
+          ?: throw IllegalStateException("accessibility-permission-required")
+        svc.act(store, params)
+      }
+      "apps.manage" -> AppTools.appsManage(ctx, params)
+      "files.op" -> fileStore.exec(params)
+      "notifications.op" -> {
+        val svc = PhoneNotificationService.instance
+          ?: throw IllegalStateException("notifications-permission-required")
+        svc.exec(params)
+      }
+      "clipboard.op" -> AppTools.clipboardOp(ctx, params)
+      else -> throw IllegalArgumentException("unknown-capability: $cap")
     }
-    throw IllegalArgumentException("unknown-capability: ${job.getString("capability")}")
   }
 }

@@ -1,10 +1,10 @@
 # Phone MCP: setup for agents
 
-Phone MCP lets you (an AI agent) use the user's real Android phone: read its battery, ask for a photo, run a command. Photos, commands and updates only happen after the user taps Approve on the phone. You cannot approve for them.
+Phone MCP lets you (an AI agent) use the user's real Android phone: see and operate apps (`screen`, `act`, `apps`), read and write shared storage (`files`), inspect and reply to notifications (`notifications`), read/set the clipboard (`clipboard`), request a photo (`capture_photo`), and hand off sensitive steps to the user (`handoff`). Photos, file deletes, handoffs, and shell commands wait for a real on-glass tap. You cannot approve for them.
 
 This works for any agent that can run shell commands. MCP is optional: every step below is a `phone` shell command, so you do not need to restart to finish setup.
 
-Requirements: a Linux or macOS computer with `curl`, and an Android 10+ phone with the user holding it. Setup needs the user for one step: scanning a QR code with the phone camera.
+Requirements: a Linux or macOS computer with `curl`, and an Android 10+ phone with the user holding it. Setup needs the user for one step: scanning a QR code with the phone.
 
 ## 1. Install
 
@@ -33,9 +33,9 @@ Add a stdio server to your own config: command `phone`, args `["mcp"]`.
 
 - Claude Code: `claude mcp add phone -- phone mcp`
 - OpenCode: `"phone": { "type": "local", "command": ["phone", "mcp"] }`
-- Others: the same command and args in that client's MCP config.
+- Cursor / Antigravity / Codex: `"phone": { "command": "phone", "args": ["mcp"] }`
 
-Your client may need a restart before the tools appear. Keep going with the shell commands. Tools: `pair`, `pair_wait`, `pair_list`, `status`, `battery`, `capture_photo`, `exec`, `update`, `jobs`, `revoke`, `doctor`. Each has a `phone <name>` equivalent where it makes sense (`phone battery`, `phone photo`, `phone exec -- echo hi`).
+Your client may need a restart before the tools appear. Keep going with the shell commands.
 
 ## 4. Pair the phone
 
@@ -45,7 +45,7 @@ phone pair --no-wait
 
 (MCP: call `pair`.) It prints a QR code, a link and a one-time code valid for 10 minutes. Show the QR block to the user exactly as printed, inside a code block. If your interface cannot draw it, give the user the `PNG` path or the `Link` line instead.
 
-Tell the user: "Open your phone's camera and scan this. If the Orkestrate Phone app isn't installed, the page that opens offers the download (Android 10 or newer); install it, then scan again. In the app, allow notifications and background access when it asks."
+Tell the user: "Open Orkestrate Phone and tap **Scan QR code** (or scan with your phone's camera). If the app isn't installed yet, get it from the link that opens, install it, then scan again. In the app, grant Notifications, Screen control (Accessibility), and Files when prompted."
 
 Then wait for the phone:
 
@@ -53,31 +53,37 @@ Then wait for the phone:
 phone wait
 ```
 
-(MCP: call `pair_wait`.) It blocks until the phone connects, up to 10 minutes. If your shell tool times out sooner, run `phone wait` again; it keeps working until the code expires. On success it prints `Paired: <phone name> (<id>)`.
+(MCP: call `pair_wait`.) It blocks until the phone connects, up to 10 minutes. On success it prints `Paired: <phone name> (<id>)`.
 
 ## 5. Confirm
 
 ```sh
-phone battery
+phone device
+phone screen
 ```
 
-Report the result to the user, for example "Your phone is at 82% and charging." If it fails, see below. You are done.
+Report the result to the user (e.g. battery, model, and whether `accessibility` and `files` are enabled). You are done.
 
-## Using it afterwards
+## Tools
 
-- `capture_photo` and `exec` show an approval card on the phone. They wait up to five minutes for the tap. If the user rejects, you get `rejected`. Do not retry in a loop; ask the user.
-- `exec` runs one command as an argument list, for example `["getprop", "ro.product.model"]`, inside the app's limits.
-- `status` and `pair_list` show paired phones and whether they are online. `revoke` forgets one.
+- `status`, `device`, `battery`: paired devices, online state, battery, screen lock, network, granted permissions.
+- `screen`, `act`, `apps`: observe the foreground app + ref-indexed UI tree (`@e1`...) + optional screenshot, tap/type/scroll/swipe/key, list or open apps/URLs.
+- `files`: `list`, `read`, `write`, `search`, `move`, `pull`, `push`, `delete` (on-glass approval) under `/sdcard`.
+- `notifications`, `clipboard`: list/dismiss/reply to notifications; get/set clipboard.
+- `handoff`: pause and ask the user to complete a step on glass (login, 2FA, payment, confirmation).
+- `capture_photo`: on-glass approved camera shot.
+- `exec`, `update`: optional shell tier (Developer settings) and relay-pushed self-update.
 
 ## When something fails
 
 | Symptom | Fix |
 |---|---|
 | `relay-not-running` | `phone start`, then retry. `phone logs` shows why it stopped. |
+| `paused-by-user` | The user tapped Pause in the app or notification shade. Ask them to tap Resume. |
+| `accessibility-permission-required` | Ask the user to tap **Screen control** on the app's Home screen to enable Accessibility. |
+| `files-permission-required` | Ask the user to tap **Files (/sdcard)** on the app's Home screen to allow All files access. |
 | `code expired or voided` | Run `phone pair --no-wait` again for a new QR. Five wrong tries void every pending code. |
 | `no-device` | Nothing is paired yet. Do step 4. |
-| Job waits and nothing happens | The phone is offline. `phone status` shows `online`. Ask the user to open the app and check the connection line. |
-| The page after scanning says the app is missing | The user needs to install it from the page, then scan the QR again. |
 | Phone cannot reach the relay | Rerun `phone doctor`. On `lan`, the phone must share the Wi-Fi; otherwise set a public URL (step 2). |
 
 Source and protocol: https://github.com/orkestrate-dot-space/phone

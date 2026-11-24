@@ -1,9 +1,11 @@
 package space.orkestrate.phone.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import com.github.takahirom.roborazzi.RoborazziRule
 import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Rule
@@ -13,7 +15,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
-/** Screens A–E against the brand mock. Record: recordRoborazziDebug --tests *ScreensShot. */
+/** Screens A–G against the Orkestrate design system. Record: recordRoborazziDebug --tests *ScreensShot. */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "w375dp-h812dp-xxhdpi")
@@ -24,19 +26,25 @@ class ScreensShot {
     captureRoboImage("screens/$name.png") { OrkTheme(useCustomFonts = false) { content() } }
 
   private val home = HomeState(
-    name = "Pixel 8", link = DotState.On, linkText = "Relay and shell connected",
+    name = "Pixel 8",
+    link = DotState.On,
+    linkText = "Connected to 6ace59c9…opentunnel.xyz",
+    paused = false,
+    accessibility = true,
+    files = true,
+    notifications = true,
+    camera = true,
     recent = listOf(
-      RecentJob("battery.get", "2 min ago"),
-      RecentJob("photo.capture", "14 min ago"),
-      RecentJob("exec.run", "1 h ago"),
+      RecentJob("screen.observe", "Just now"),
+      RecentJob("files.op", "4 min ago"),
+      RecentJob("human.handoff", "18 min ago"),
     ),
-    autoApprove = true, selfUpdate = false,
   )
 
   @Test fun a_unpaired() = shot("a-unpaired") { UnpairedScreen({}, {}) }
 
-  @Test fun b_justPaired() = shot("b-just-paired") {
-    JustPairedScreen(SetupState("6ace59c9…opentunnel.xyz", true, false, false), {}, {}, {})
+  @Test fun b_setup() = shot("b-setup") {
+    SetupScreen(SetupState("6ace59c9…opentunnel.xyz", true, true, true, false, false), {}, {}, {}, {}, {})
   }
 
   @Test fun c_enterCode() = shot("c-enter-code") {
@@ -49,18 +57,62 @@ class ScreensShot {
     )
   }
 
-  @Test fun d_home() = shot("d-home") { HomeScreen(home, {}, {}, {}) }
+  @Test fun d_home() = shot("d-home") { HomeScreen(home, {}, {}, {}, {}, {}, {}) }
 
   @Test fun e_approval() = shot("e-approval") {
     Box(Modifier.fillMaxSize()) {
-      HomeScreen(home, {}, {}, {})
+      HomeScreen(home, {}, {}, {}, {}, {}, {})
       ApprovalSheet(
         ApprovalCard(
-          "j1", "Your agent wants a photo.", "Nothing is captured until you take it.",
+          "j1", "Take a photo?", "Nothing is captured until you take it.",
           listOf("Tool" to "photo.capture", "Size" to "1280 px, JPEG"), "Open camera", true,
         ),
         {}, {},
       )
     }
+  }
+
+  @Test fun f_handoff() = shot("f-handoff") {
+    Box(Modifier.fillMaxSize()) {
+      HomeScreen(home, {}, {}, {}, {}, {}, {})
+      ApprovalSheet(
+        ApprovalCard(
+          "j2", "Agent needs you.", "Sign in to your bank app, then tap Continue.",
+          listOf("Tool" to "human.handoff"), "Continue", false,
+        ),
+        {}, {},
+      )
+    }
+  }
+
+  @Test fun g_settings() = shot("g-settings") {
+    SettingsScreen(
+      SettingsState(
+        name = "Pixel 8",
+        deviceId = "dev_qT_dyBVkKbkw",
+        relayUrl = "https://6ace59c9.opentunnel.xyz",
+        autoApprove = false,
+        blockedCount = 6,
+        shellStatus = "Optional Wi-Fi developer shell (logcat, dumpsys, pm).",
+        shellActionLabel = "Set up shell",
+        selfUpdate = true,
+        buildInfo = "v0.19.0 (build 43)",
+        logs = listOf("connected — Pixel 8", "screen.observe · job_123"),
+      ),
+      {}, {}, {}, {}, {}, {}, {}, {},
+    )
+  }
+
+  @Test fun h_scan() = shot("h-scan") {
+    ScanScreen(
+      cameraGranted = true,
+      error = null,
+      onBack = {},
+      onPaste = {},
+      onEnterCode = {},
+      onGrantCamera = {},
+      onScanned = {},
+      previewSlot = { Box(Modifier.fillMaxSize().background(Color(0xFF111111))) },
+    )
   }
 }

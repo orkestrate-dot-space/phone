@@ -1,4 +1,4 @@
-// phone desktop process v0 — MCP (stdio) + embedded relay (HTTP+WS).
+// phone desktop process v1 — MCP (stdio) + embedded relay (HTTP+WS).
 // Logs go to stderr ALWAYS (stdout is the MCP channel). No deps.
 
 const PORT = Number(process.env.PHONE_PORT ?? "19877");
@@ -9,16 +9,15 @@ const DIST_DIR = process.env.PHONE_DIST ?? new URL("../../dist/", import.meta.ur
 // CLI over this unix socket (filesystem-permissioned, unreachable through the tunnel).
 const SOCK = process.env.PHONE_SOCK ?? DATA_DIR + "/control.sock";
 const PAIR_BASE = process.env.PHONE_PAIR_BASE ?? "https://mobile.orkestrate.space/phone/pair";
+const MAX_PUSH_BYTES = 10 * 1024 * 1024;
 
 import { chmodSync, mkdirSync, unlinkSync } from "node:fs";
 import { networkInterfaces, tmpdir } from "node:os";
+import { basename } from "node:path";
 import { qrPng, qrText } from "./qr";
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // 32 symbols, no I/L/O/U
-const rand = (n: number) => {
-  const b = crypto.getRandomValues(new Uint8Array(n));
-  return b;
-};
+const rand = (n: number) => crypto.getRandomValues(new Uint8Array(n));
 const b64url = (b: Uint8Array) =>
   Buffer.from(b).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const makeCode = () => {
@@ -50,9 +49,14 @@ async function remoteCall(name: string, params?: unknown): Promise<any> {
   return j.result;
 }
 
-// ---- CLI: `phone pair|wait|battery|status|doctor|revoke|photo|exec|update|devices` ----
-const CLI = new Set(["pair", "wait", "battery", "status", "doctor", "revoke", "photo", "exec", "update", "devices"]);
+// ---- CLI ----
+const CLI = new Set([
+  "pair", "wait", "device", "battery", "screen", "act", "apps", "files",
+  "notifications", "clipboard", "handoff", "status", "doctor", "revoke",
+  "photo", "exec", "update", "devices",
+]);
 const CLI_TOOL: Record<string, string> = { wait: "pair_wait", photo: "capture_photo", devices: "pair_list" };
+
 async function runCli(cmd: string, args: string[]) {
   const flag = (f: string) => args.includes(f);
   const rest = args.filter(a => !a.startsWith("--"));
@@ -60,6 +64,47 @@ async function runCli(cmd: string, args: string[]) {
   if (cmd === "revoke") params.deviceId = rest[0];
   if (cmd === "wait" && rest[0]) params.code = rest[0];
   if (cmd === "exec") params.argv = args.slice(args[0] === "--" ? 1 : 0);
+  if (cmd === "screen") {
+    if (flag("--screenshot")) params.screenshot = true;
+  }
+  if (cmd === "act") {
+    if (!rest[0]) throw new Error("usage: phone act '<json>'");
+    Object.assign(params, JSON.parse(rest[0]));
+  }
+  if (cmd === "apps") {
+    const sub = rest[0] ?? "list";
+    params.action = sub;
+    if (sub === "open" && rest[1]) {
+      if (/^https?:\/\//.test(rest[1])) params.url = rest[1];
+      else params.package = rest[1];
+    } else if (rest[1]) {
+      params.query = rest[1];
+    }
+  }
+  if (cmd === "files") {
+    const sub = rest[0];
+    if (!sub) throw new Error("usage: phone files <list|read|write|search|move|delete|pull|push> ...");
+    params.action = sub;
+    if (rest[1]) params.path = rest[1];
+    if (sub === "move" && rest[2]) params.dest = rest[2];
+    if (sub === "write" && rest[2] !== undefined) params.content = rest[2];
+    if (sub === "search" && rest[1]) { params.query = rest[1]; if (rest[2]) params.path = rest[2]; else delete params.path; }
+    if ((sub === "pull" || sub === "push") && rest[2]) params.localPath = rest[2];
+  }
+  if (cmd === "notifications") {
+    const sub = rest[0] ?? "list";
+    params.action = sub;
+    if (rest[1]) params.key = rest[1];
+    if (rest[2]) params.text = rest[2];
+  }
+  if (cmd === "clipboard") {
+    const sub = rest[0] ?? "get";
+    params.action = sub;
+    if (sub === "set" && rest[1] !== undefined) params.text = rest.slice(1).join(" ");
+  }
+  if (cmd === "handoff") {
+    params.message = rest.join(" ") || "Continue on your phone";
+  }
   const relayArg = args.find(a => a.startsWith("--relay="));
   if (cmd === "pair" && relayArg) params.relay = relayArg.slice(8);
   const out = await remoteCall(CLI_TOOL[cmd] ?? cmd, params);
@@ -85,7 +130,16 @@ if (CLI.has(process.argv[2] ?? "")) {
 }
 
 // ---- stores ----
-type Device = { id: string; name: string; token: string; lastSeen: number; appVersion?: number };
+type Device = {
+  id: string;
+  name: string;
+  token: string;
+  lastSeen: number;
+  appVersion?: number;
+  caps?: string[];
+  paused?: boolean;
+  permissions?: Record<string, boolean>;
+};
 type Code = { code: string; expires: number };
 const devices = new Map<string, Device>();
 const byToken = new Map<string, Device>();
@@ -109,8 +163,14 @@ async function save() {
 }
 
 // ---- jobs: queued → delivered → done/failed/expired (SPEC §3) ----
-type Waiter = { resolve: (v: unknown) => void; reject: (e: Error) => void;
-  timer: Timer; cap: string; deviceId: string; job: Record<string, unknown> };
+type Waiter = {
+  resolve: (v: unknown) => void;
+  reject: (e: Error) => void;
+  timer: Timer;
+  cap: string;
+  deviceId: string;
+  job: Record<string, unknown>;
+};
 const waiting = new Map<string, Waiter>(); // by job id, queued or delivered
 const delivered = new Set<string>(); // job ids already pushed down the socket
 const sockets = new Map<string, any>(); // deviceId -> ws
@@ -154,7 +214,7 @@ function flushQueue(deviceId: string) {
 
 let proxyMode = false;
 try {
-const server = Bun.serve({
+Bun.serve({
   port: PORT,
   hostname: "0.0.0.0",
   async fetch(req, srv) {
@@ -163,11 +223,7 @@ const server = Bun.serve({
     if (u.pathname === "/version" || u.pathname === "/health") {
       return Response.json({ ok: true, relay: "phone", protocol: 1 });
     }
-    // NOTE: no HTTP mint endpoint. Codes are minted only via the MCP
-    // phone.pair tool (loopback stdin, never the network): through a tunnel
-    // every visitor looks loopback, so no HTTP endpoint may mean "local".
-    // Redeem (below) is safe to expose: 40-bit code + 5-strike voiding.
-    // Redeem — phone path (LAN ok)
+    // Redeem — phone path (LAN/tunnel ok; 40-bit code + 5-strike voiding)
     const m = u.pathname.match(/^\/pair\/([A-Za-z0-9-]{8,9})$/);
     if (m && req.method === "POST") {
       const code = normCode(m[1]);
@@ -216,9 +272,10 @@ const server = Bun.serve({
       const ok = srv.upgrade(req, { data: { pendingAuth: dev.id } });
       return ok ? new Response("upgrading") : new Response("upgrade failed", { status: 500 });
     }
-    return new Response("phone relay v0", { status: 404 });
+    return new Response("phone relay v1", { status: 404 });
   },
   websocket: {
+    maxPayloadLength: 32 * 1024 * 1024,
     open(ws: any) { ws.data = { ...ws.data, authed: false }; },
     async message(ws: any, raw: any) {
       let msg: any;
@@ -227,15 +284,27 @@ const server = Bun.serve({
         const dev = devices.get(msg.deviceId);
         const authedId = ws.data?.pendingAuth;
         if (!dev || dev.id !== authedId || msg.deviceId !== authedId) { ws.close(4401, "bad hello"); return; }
-        if (msg.name) { dev.name = String(msg.name).slice(0, 64); }
+        if (msg.name) dev.name = String(msg.name).slice(0, 64);
         if (typeof msg.appVersion === "number") dev.appVersion = msg.appVersion;
-        await save();
+        if (Array.isArray(msg.caps)) dev.caps = msg.caps.map(String);
+        if (typeof msg.paused === "boolean") dev.paused = msg.paused;
+        if (msg.permissions && typeof msg.permissions === "object") dev.permissions = msg.permissions;
         dev.lastSeen = Date.now();
+        await save();
         sockets.set(dev.id, ws);
         ws.data.authed = true; ws.data.deviceId = dev.id;
         log(`hello ${dev.id} caps=${(msg.caps ?? []).join(",")}`);
         ws.send(JSON.stringify({ t: "welcome", deviceId: dev.id }));
         flushQueue(dev.id);
+        return;
+      }
+      if (msg.t === "state") {
+        const id = ws.data?.deviceId;
+        const dev = id ? devices.get(id) : undefined;
+        if (!dev) return;
+        if (typeof msg.paused === "boolean") dev.paused = msg.paused;
+        if (msg.permissions && typeof msg.permissions === "object") dev.permissions = msg.permissions;
+        dev.lastSeen = Date.now();
         return;
       }
       if (msg.t === "pong") return;
@@ -253,10 +322,6 @@ const server = Bun.serve({
       const id = ws.data?.deviceId;
       if (id && sockets.get(id) === ws) {
         sockets.delete(id);
-        // The app may have died between delivery and response (approvals live
-        // in its memory). Unmark delivered so the next hello truly redelivers
-        // instead of logging a no-op "delivered on hello" for a job the fresh
-        // process never saw.
         for (const [jid, w] of waiting) if (w.deviceId === id) delivered.delete(jid);
         log(`bye ${id}`);
       }
@@ -288,24 +353,83 @@ if (!proxyMode) {
   try { chmodSync(SOCK, 0o600); } catch {}
 }
 
-// stash token on upgrade: Bun doesn't pass headers to open(), so re-derive via URL is
-// already authed above; bind pendingAuth -> _token not needed since hello checks id.
 log(proxyMode ? `relay already running on :${PORT}; forwarding tool calls to it`
   : `relay on :${PORT} data=${DATA_DIR}`);
 
 // ---- MCP over stdio ----
 const TOOLS = [
-  { name: "status", description: "Paired devices and online state",
+  { name: "status", description: "Paired devices, online state, and granted capabilities",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+  { name: "device", description: "Read device info, battery, screen lock state, network, and granted permissions",
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
   { name: "battery", description: "Read the phone battery via the companion app",
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "capture_photo", description: "Ask the human to take a photo (on-glass approval, up to 300s)",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "exec", description: "Run a system command on the phone (on-glass approval every time, app-sandbox limits)",
+  { name: "screen", description: "Observe the current phone screen: foreground package, ref-indexed UI tree (@e1..), and optional screenshot saved to a temp file",
+    inputSchema: { type: "object", properties: {
+      screenshot: { type: "boolean" },
+      maxPx: { type: "number" },
+      quality: { type: "number" },
+      inlineBase64: { type: "boolean" },
+    }, additionalProperties: false } },
+  { name: "act", description: "Perform a UI action on the phone screen via AccessibilityService (tap, long_press, type, scroll, swipe, key)",
+    inputSchema: { type: "object", properties: {
+      action: { type: "string", enum: ["tap", "long_press", "type", "scroll", "swipe", "key"] },
+      ref: { type: "string" },
+      x: { type: "number" },
+      y: { type: "number" },
+      x2: { type: "number" },
+      y2: { type: "number" },
+      text: { type: "string" },
+      clear: { type: "boolean" },
+      submit: { type: "boolean" },
+      direction: { type: "string", enum: ["up", "down", "left", "right"] },
+      key: { type: "string", enum: ["back", "home", "recents", "enter"] },
+    }, required: ["action"], additionalProperties: false } },
+  { name: "apps", description: "List installed launchable apps or open an app package / URL on the phone",
+    inputSchema: { type: "object", properties: {
+      action: { type: "string", enum: ["list", "open"] },
+      package: { type: "string" },
+      url: { type: "string" },
+      query: { type: "string" },
+    }, required: ["action"], additionalProperties: false } },
+  { name: "files", description: "Read, write, list, search, move, pull, push, or delete (on-glass approval) files under /sdcard",
+    inputSchema: { type: "object", properties: {
+      action: { type: "string", enum: ["list", "read", "write", "search", "move", "delete", "pull", "push"] },
+      path: { type: "string" },
+      dest: { type: "string" },
+      localPath: { type: "string" },
+      content: { type: "string" },
+      encoding: { type: "string", enum: ["utf8", "base64"] },
+      query: { type: "string" },
+      maxBytes: { type: "number" },
+    }, required: ["action"], additionalProperties: false } },
+  { name: "notifications", description: "List active notifications, dismiss one, or send an inline reply",
+    inputSchema: { type: "object", properties: {
+      action: { type: "string", enum: ["list", "dismiss", "reply"] },
+      key: { type: "string" },
+      text: { type: "string" },
+    }, required: ["action"], additionalProperties: false } },
+  { name: "clipboard", description: "Get or set the phone clipboard text",
+    inputSchema: { type: "object", properties: {
+      action: { type: "string", enum: ["get", "set"] },
+      text: { type: "string" },
+    }, required: ["action"], additionalProperties: false } },
+  { name: "handoff", description: "Pause and ask the user to complete a step on their phone (login, 2FA, payment, confirmation), resolving only on a real tap",
+    inputSchema: { type: "object", properties: {
+      message: { type: "string" },
+      timeoutSec: { type: "number" },
+    }, required: ["message"], additionalProperties: false } },
+  { name: "capture_photo", description: "Ask the human to take a photo (on-glass approval, up to 300s), saved to a temp file",
+    inputSchema: { type: "object", properties: {
+      maxPx: { type: "number" },
+      quality: { type: "number" },
+      inlineBase64: { type: "boolean" },
+    }, additionalProperties: false } },
+  { name: "exec", description: "Run a system command on the phone (on-glass approval unless exact-match auto-approved)",
     inputSchema: { type: "object", properties: { argv: { type: "array", items: { type: "string" } }, timeoutSec: { type: "number" } }, required: ["argv"], additionalProperties: false } },
   { name: "update", description: "Ship the relay-published build to the phone: downloads + silent shell install, zero taps if opted in",
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "pair", description: "Start pairing a phone: mints a one-time code (10 min) and returns a QR + link for the user to scan with the phone camera. Show the QR to the user, then call pair_wait. Optional relay overrides the public URL.",
+  { name: "pair", description: "Start pairing a phone: mints a one-time code (10 min) and returns a QR + link for the user to scan with the phone. Show the QR to the user, then call pair_wait. Optional relay overrides the public URL.",
     inputSchema: { type: "object", properties: { relay: { type: "string" } }, additionalProperties: false } },
   { name: "pair_wait", description: "Block until the phone redeems the pairing code (up to 10 min). Call after showing the QR from pair.",
     inputSchema: { type: "object", properties: { code: { type: "string" } }, additionalProperties: false } },
@@ -372,20 +496,26 @@ function publicRelay(override?: string): { url: string; kind: string; warning?: 
       : "LAN address: the phone must be on the same Wi-Fi. For use anywhere, set up a tunnel (see agent.md) and rerun pair." };
 }
 
+function requireDevice(): Device {
+  const dev = pickDevice();
+  if (!dev) throw new Error("no-device: pair the app and keep it online");
+  return dev;
+}
+
 async function localCall(rawName: string, params?: any) {
   const name = "phone." + rawName.replace(/^phone[._]/, "");
-  if (name === "phone.status") {
-    return {
-      paired: devices.size > 0,
-      devices: [...devices.values()].map(d => ({ id: d.id, name: d.name,
-        appVersion: d.appVersion ?? null, online: online(d.id), lastSeen: d.lastSeen })),
-    };
-  }
-  if (name === "phone.pair_list") {
-    return {
-      devices: [...devices.values()].map(d => ({ id: d.id, name: d.name,
-        appVersion: d.appVersion ?? null, online: online(d.id), lastSeen: d.lastSeen })),
-    };
+  if (name === "phone.status" || name === "phone.pair_list") {
+    const list = [...devices.values()].map(d => ({
+      id: d.id,
+      name: d.name,
+      appVersion: d.appVersion ?? null,
+      online: online(d.id),
+      paused: d.paused ?? false,
+      permissions: d.permissions ?? null,
+      caps: d.caps ?? null,
+      lastSeen: d.lastSeen,
+    }));
+    return name === "phone.status" ? { paired: devices.size > 0, devices: list } : { devices: list };
   }
   if (name === "phone.revoke") {
     const id = params?.deviceId;
@@ -451,38 +581,126 @@ async function localCall(rawName: string, params?: any) {
       pairWaiters.set(code, [...(pairWaiters.get(code) ?? []), { resolve, reject, timer }]);
     });
   }
+  if (name === "phone.device") {
+    const dev = requireDevice();
+    try {
+      return await sendJob(dev.id, "device.info", {}) as Record<string, unknown>;
+    } catch (e) {
+      if ((e as Error).message.includes("unknown-capability")) {
+        const battery = await sendJob(dev.id, "battery.get", {});
+        return { name: dev.name, appVersion: dev.appVersion ?? null, battery };
+      }
+      throw e;
+    }
+  }
   if (name === "phone.battery") {
-    const dev = pickDevice(); // queue tolerates offline, hello flushes
-    if (!dev) throw new Error("no-device: pair the app and keep it online");
-    const data = await sendJob(dev.id, "battery.get", {});
-    return data as Record<string, unknown>;
+    const dev = requireDevice();
+    return await sendJob(dev.id, "battery.get", {}) as Record<string, unknown>;
+  }
+  if (name === "phone.screen") {
+    const dev = requireDevice();
+    const res = await sendJob(dev.id, "screen.observe", {
+      screenshot: Boolean(params?.screenshot),
+      maxPx: params?.maxPx ?? 1080,
+      quality: params?.quality ?? 75,
+    }) as Record<string, unknown>;
+    if (typeof res.screenshot_b64 === "string") {
+      const buf = Buffer.from(res.screenshot_b64, "base64");
+      const outPath = `${tmpdir()}/phone-screen-${b64url(rand(6))}.jpg`;
+      await Bun.write(outPath, buf, { mode: 0o600 });
+      try { chmodSync(outPath, 0o600); } catch {}
+      res.screenshotPath = outPath;
+      res.screenshotBytes = buf.length;
+      if (!params?.inlineBase64) delete res.screenshot_b64;
+    }
+    return res;
+  }
+  if (name === "phone.act") {
+    const dev = requireDevice();
+    if (!params?.action) throw new Error("action is required");
+    return await sendJob(dev.id, "screen.act", params) as Record<string, unknown>;
+  }
+  if (name === "phone.apps") {
+    const dev = requireDevice();
+    if (!params?.action) throw new Error("action is required");
+    return await sendJob(dev.id, "apps.manage", params) as Record<string, unknown>;
+  }
+  if (name === "phone.files") {
+    const dev = requireDevice();
+    const action = params?.action;
+    if (!action) throw new Error("action is required");
+    const jobParams: Record<string, unknown> = { ...params };
+    delete jobParams.localPath;
+    if (action === "push") {
+      if (!params.localPath) throw new Error("localPath is required for push");
+      const f = Bun.file(params.localPath);
+      if (!(await f.exists())) throw new Error("local file not found: " + params.localPath);
+      if (f.size > MAX_PUSH_BYTES) throw new Error(`file exceeds ${MAX_PUSH_BYTES} bytes limit`);
+      const buf = Buffer.from(await f.arrayBuffer());
+      jobParams.bytes_b64 = buf.toString("base64");
+      if (!jobParams.path) jobParams.path = basename(params.localPath);
+    }
+    const timeoutMs = action === "delete" ? 300000 : 60000;
+    const res = await sendJob(dev.id, "files.op", jobParams, timeoutMs) as Record<string, unknown>;
+    if (action === "pull" && typeof res.bytes_b64 === "string") {
+      const buf = Buffer.from(res.bytes_b64, "base64");
+      const outPath = params.localPath || `${tmpdir()}/phone-pull-${basename(String(params.path ?? "file"))}`;
+      await Bun.write(outPath, buf, { mode: 0o600 });
+      try { chmodSync(outPath, 0o600); } catch {}
+      return { path: outPath, bytes: buf.length, remotePath: res.path ?? params.path };
+    }
+    return res;
+  }
+  if (name === "phone.notifications") {
+    const dev = requireDevice();
+    if (!params?.action) throw new Error("action is required");
+    return await sendJob(dev.id, "notifications.op", params) as Record<string, unknown>;
+  }
+  if (name === "phone.clipboard") {
+    const dev = requireDevice();
+    if (!params?.action) throw new Error("action is required");
+    return await sendJob(dev.id, "clipboard.op", params) as Record<string, unknown>;
+  }
+  if (name === "phone.handoff") {
+    const dev = requireDevice();
+    const message = String(params?.message ?? "").trim();
+    if (!message) throw new Error("message is required");
+    const timeoutSec = Math.min(Math.max(Number(params?.timeoutSec ?? 300), 30), 600);
+    return await sendJob(dev.id, "human.handoff", { message, timeoutSec }, timeoutSec * 1000) as Record<string, unknown>;
   }
   if (name === "phone.capture_photo") {
-    const dev = pickDevice(); // queue tolerates offline, hello flushes
-    if (!dev) throw new Error("no-device: pair the app and keep it online");
-    const data = await sendJob(dev.id, "photo.capture", { maxPx: 1280, quality: 80 }, 300000);
-    return data as Record<string, unknown>;
+    const dev = requireDevice();
+    const res = await sendJob(dev.id, "photo.capture", {
+      maxPx: params?.maxPx ?? 1280,
+      quality: params?.quality ?? 80,
+    }, 300000) as Record<string, unknown>;
+    if (typeof res.bytes_b64 === "string") {
+      const buf = Buffer.from(res.bytes_b64, "base64");
+      const outPath = `${tmpdir()}/phone-photo-${b64url(rand(6))}.jpg`;
+      await Bun.write(outPath, buf, { mode: 0o600 });
+      try { chmodSync(outPath, 0o600); } catch {}
+      res.path = outPath;
+      res.bytes = buf.length;
+      if (!params?.inlineBase64) delete res.bytes_b64;
+    }
+    return res;
   }
   if (name === "phone.exec") {
-    const dev = pickDevice();
-    if (!dev) throw new Error("no-device: pair the app and keep it online");
+    const dev = requireDevice();
     const argv = params?.argv;
     if (!Array.isArray(argv) || argv.length === 0 || argv.some((a: unknown) => typeof a !== "string"))
       throw new Error("argv must be a non-empty string array");
-    const data = await sendJob(dev.id, "exec.run",
-      { argv, timeoutSec: Math.min(Math.max(params?.timeoutSec ?? 30, 5), 120) }, 300000);
-    return data as Record<string, unknown>;
+    return await sendJob(dev.id, "exec.run",
+      { argv, timeoutSec: Math.min(Math.max(params?.timeoutSec ?? 30, 5), 120) }, 300000) as Record<string, unknown>;
   }
   if (name === "phone.update") {
-    const dev = pickDevice();
-    if (!dev) throw new Error("no-device: pair the app and keep it online");
+    const dev = requireDevice();
     let meta: any = null;
     try { meta = await Bun.file(DIST_DIR + "/version.json").json(); }
     catch { throw new Error("no build published in dist/"); }
-    const data = await sendJob(dev.id, "app.update",
+    return await sendJob(dev.id, "app.update",
       { versionCode: meta.versionCode, versionName: meta.versionName ?? "",
-        notes: meta.notes ?? "" }, 180000);
-    return data as Record<string, unknown>;
+        notes: meta.notes ?? "" }, 180000) as Record<string, unknown>;
   }
   throw new Error("unknown tool " + name);
 }
@@ -505,7 +723,7 @@ async function handle(msg: any) {
     switch (msg.method) {
       case "initialize":
         if (id !== undefined) reply(id, { protocolVersion: "2024-11-05",
-          capabilities: { tools: {} }, serverInfo: { name: "phone", version: "0.1.0" } });
+          capabilities: { tools: {} }, serverInfo: { name: "phone", version: "0.2.0" } });
         break;
       case "notifications/initialized": break;
       case "ping": if (id !== undefined) reply(id, {}); break;
@@ -532,9 +750,7 @@ async function handle(msg: any) {
 }
 
 async function mcpLoop() {
-  // --serve: relay only, stdout is free for logs
   if (process.argv.includes("--serve")) { log("serve mode (no MCP)"); return; }
-  // MCP mode only if stdin is piped; else just run the relay (handy for dev)
   if (process.stdin.isTTY) { log("tty stdin: relay only, MCP idle. use --serve to silence this."); return; }
   let buf = "";
   for await (const chunk of Bun.stdin.stream()) {

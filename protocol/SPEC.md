@@ -27,10 +27,12 @@ also accepts `phone://pair?code=…&relay=…`. Codes redeem with or without the
   tunnel, so it says nothing about devices). The app uses it to tell the user whether the relay answers.
 - `WS /device`, header `Authorization: Bearer <token>`. Query `?token=` also accepted.
 - Frames are JSON text messages, `{t, ...}`:
-  - app→relay `hello`: `{"t":"hello","deviceId":"...","name":"...","caps":["battery.get"]}`
-  - relay→app `job`: `{"t":"job","job":{"id":"job_...","capability":"battery.get","params":{},"timeoutMs":60000}}`
+  - app→relay `hello`: `{"t":"hello","deviceId":"...","name":"...","appVersion":43,"paused":false,"permissions":{"accessibility":true,"files":true,"notifications":true,"camera":true},"caps":["device.info","battery.get","screen.observe","screen.act","apps.manage","files.op","notifications.op","clipboard.op","human.handoff","photo.capture","exec.run","app.update"]}`
+  - app→relay `state`: `{"t":"state","paused":false,"permissions":{...}}` (sent whenever pause state or permissions change)
+  - relay→app `job`: `{"t":"job","job":{"id":"job_...","capability":"screen.observe","params":{},"timeoutMs":60000}}`
   - app→relay `result`: `{"t":"result","id":"job_...","ok":true,"data":{...}}` or `ok:false, error:"..."`
   - both ways `ping`/`pong`: `{"t":"ping"}` / `{"t":"pong"}`, 25s interval, 60s dead.
+- Pause kill switch: when `paused` is `true` on the phone, `device.info` and `battery.get` still answer (reporting `paused: true`), while all other jobs immediately return `ok:false, error:"paused-by-user"`.
 - Reconnect: app backs off 1s→30s. Redelivered jobs carry same `id`; app answers once (idempotent), relay dedupes.
 
 ## Jobs
@@ -47,8 +49,38 @@ state: queued → delivered → done | failed | expired
 
 ## Capabilities
 
-### `battery.get` (ungated)
+### `device.info` (ungated)
+`{}` → `{"name":"...","model":"...","androidVersion":"16","sdk":36,"appVersion":43,"battery":{"level":61,"charging":true,"voltageMv":3996,"tempC":34.6},"screen":{"interactive":true,"locked":false},"network":"wifi","paused":false,"permissions":{"accessibility":true,"files":true,"notifications":true,"camera":true,"shell":false}}`.
+
+### `battery.get` (ungated, legacy)
 `{}` → `{"level":61,"charging":true,"voltageMv":3996,"tempC":34.6}`.
+
+### `screen.observe` (ungated, AccessibilityService)
+`{"screenshot":false,"maxPx":1080,"quality":75}` → `{"package":"...","secureScreen":false,"blocked":false,"nodes":[{"ref":"@e1","role":"Button","text":"Send","desc":"","id":"send_btn","bounds":[900,1800,1040,1920],"clickable":true,"editable":false,"scrollable":false,"checked":false,"focused":false}],"screenshot_b64":"..."}`.
+- Ref-indexed UI tree capped at 150 visible nodes.
+- If the foreground app is in the user's blocklist, returns `{"blocked":true,"package":"..."}` without reading nodes or taking a screenshot.
+- If `FLAG_SECURE` is active on Android 11+, `secureScreen: true` and `screenshot_b64` is omitted.
+
+### `screen.act` (ungated, AccessibilityService)
+`{"action":"tap|long_press|type|scroll|swipe|key","ref":"@e1","x":0,"y":0,"x2":0,"y2":0,"text":"...","clear":false,"submit":false,"direction":"down","key":"back|home|recents|enter"}` → `{"ok":true}`.
+
+### `apps.manage` (ungated)
+- `{"action":"list","query":"..."}` → `{"apps":[{"package":"...","label":"..."}]}`
+- `{"action":"open","package":"..."}` or `{"action":"open","url":"https://..."}` → `{"opened":true}`
+
+### `files.op` (ungated except `delete`, `/sdcard` containment)
+- `{"action":"list|read|write|search|move|pull|push|delete","path":"...","dest":"...","content":"...","encoding":"utf8|base64","query":"...","maxBytes":262144,"bytes_b64":"..."}`
+- All paths are canonicalized and confined to `/sdcard` (`MANAGE_EXTERNAL_STORAGE`).
+- `delete` is always approval-gated on glass (300s timeout).
+
+### `notifications.op` (ungated, NotificationListenerService)
+- `{"action":"list|dismiss|reply","key":"...","text":"..."}`
+
+### `clipboard.op` (ungated)
+- `{"action":"get|set","text":"..."}`
+
+### `human.handoff` (approval-gated)
+`{"message":"Sign in to your account, then tap Continue.","timeoutSec":300}` → `{"continued":true}` (or `ok:false, error:"rejected"`). Only a real on-glass tap resolves it.
 
 ### `photo.capture` (approval-gated)
 `{"maxPx":1280,"quality":80}` → `{"mime":"image/jpeg","bytes_b64":"..."}`.
@@ -150,9 +182,17 @@ Rules, all load-bearing:
 Tool names are unprefixed and use only `[a-z_]`, which every MCP client accepts (clients add the server
 name themselves). The legacy dotted names (`phone.battery`) are still accepted by the relay.
 
-- `status` → paired devices + online state + app versions.
+- `status` → paired devices + online state + app versions + paused/permissions.
+- `device` → full device info, battery, screen lock state, network, permissions.
 - `battery` → waits for job result (60s; queues while offline, delivers on hello).
-- `capture_photo` → approval-gated, 300s window.
+- `screen` → current app + ref-indexed UI tree (`@e1`...) + optional screenshot saved to temp file.
+- `act` → `tap`, `long_press`, `type`, `scroll`, `swipe`, `key` (`back|home|recents|enter`).
+- `apps` → `list` launchable apps or `open` a package/URL.
+- `files` → `list`, `read`, `write`, `search`, `move`, `pull`, `push`, `delete` (approval-gated) on `/sdcard`.
+- `notifications` → `list`, `dismiss`, `reply`.
+- `clipboard` → `get`, `set`.
+- `handoff` → pause and ask the user to complete a step on glass (30–600s, default 300s).
+- `capture_photo` → approval-gated, 300s window, saved to temp file.
 - `exec` → approval-gated (or auto for the allowlist); result carries `tier`.
 - `update` → ships the relay's dist build to the phone (see `app.update`).
 - `pair {relay?}` → mints a code (10 min, single use) and returns `pair_url`, `qr` (text block),
@@ -167,7 +207,8 @@ name themselves). The legacy dotted names (`phone.battery`) are still accepted b
 
 One relay serves everything. An MCP process started while a relay already runs on the port forwards
 its tool calls to it over the control socket instead of binding the port. The installed `phone` command
-(`pair`, `wait`, `battery`, `status`, `doctor`, `photo`, `exec`, `update`, `devices`, `revoke`, `mcp`,
-`start`, `stop`, `logs`, `uninstall`) uses the same socket, so setup works before an agent restarts.
+(`pair`, `wait`, `device`, `battery`, `screen`, `act`, `apps`, `files`, `notifications`, `clipboard`,
+`handoff`, `status`, `doctor`, `photo`, `exec`, `update`, `devices`, `revoke`, `mcp`, `start`, `stop`,
+`logs`, `uninstall`) uses the same socket, so setup works before an agent restarts.
 
 Later: `phone.request` (generic approval card), `phone.sms_otp`, `phone.location`.
