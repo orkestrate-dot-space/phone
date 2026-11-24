@@ -8,7 +8,6 @@ import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -30,20 +29,11 @@ class RelayService : Service() {
   override fun onCreate() {
     super.onCreate()
     app = application as PhoneApp
-    runner = ExecRunner(this, app.relay, app.adb, app.store)
+    runner = ExecRunner(this, app.relay, app.shizuku, app.store)
     nm = getSystemService(NotificationManager::class.java)
     nm.createNotificationChannel(NotificationChannel("link", "Relay link", NotificationManager.IMPORTANCE_MIN))
     nm.createNotificationChannel(NotificationChannel("jobs", "Agent requests", NotificationManager.IMPORTANCE_HIGH))
     app.relay.listener = ServiceListener()
-    app.adb.watchPorts { connect, pair ->
-      if (pair.isNotEmpty()) app.store.adbPairPort = pair.first()
-      if (connect.isNotEmpty()) app.store.adbConnectPort = connect.first()
-      if (pair.isNotEmpty() && app.store.adbSerial == null) {
-        ShellPairing.prompt(this)
-      } else {
-        ShellPairing.clear(this)
-      }
-    }
   }
 
   override fun onStartCommand(i: Intent?, flags: Int, startId: Int): Int {
@@ -54,33 +44,10 @@ class RelayService : Service() {
       @Suppress("DEPRECATION") startForeground(1, n)
     }
     app.relay.connect()
-    Thread {
-      try {
-        val s = app.store.adbSerial
-        val port = s?.substringAfterLast(":")?.toIntOrNull()
-        if (s != null && port != null) {
-          app.adb.setSerial(s)
-          if (app.adb.connect(port)) {
-            selfGrant()
-          } else app.adb.drop()
-        }
-      } catch (e: Exception) { Log.d("phone", "service shell restore: $e") }
-    }.start()
     return START_STICKY
   }
 
-  private fun selfGrant() {
-    try {
-      if (packageManager.checkPermission(
-          "android.permission.WRITE_SECURE_SETTINGS", packageName) ==
-          PackageManager.PERMISSION_GRANTED) return
-      app.adb.exec(listOf("pm", "grant", packageName,
-        "android.permission.WRITE_SECURE_SETTINGS"), 15)
-    } catch (e: Exception) { Log.d("phone", "service self-grant: $e") }
-  }
-
   override fun onDestroy() {
-    app.adb.unwatch()
     app.relay.disconnect()
     super.onDestroy()
   }
@@ -125,13 +92,6 @@ class RelayService : Service() {
           })
           return
         }
-      } else if (capability == "app.update" && app.store.allowSelfUpdate) {
-        SelfUpdate(this@RelayService, app.relay, app.adb, app.store).run(jobId,
-          object : SelfUpdate.Sink {
-            override fun note(s: String) { Log.d("phone", s) }
-            override fun progress(pct: Int) {}
-          })
-        return
       }
       app.uiListener?.onApproval(jobId, capability)
     }
@@ -148,7 +108,6 @@ class RelayService : Service() {
         "exec.run" -> "Agent wants to run a command" to (p?.optJSONArray("argv")
           ?.let { a -> (0 until a.length()).joinToString(" ") { a.getString(it) } }
           ?.take(120) ?: "…")
-        "app.update" -> "Agent wants to update Orkestrate Phone" to "Tap to approve"
         else -> "Agent requests a photo" to "Tap to approve or reject"
       }
       val n = Notification.Builder(this@RelayService, "jobs")

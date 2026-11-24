@@ -18,10 +18,10 @@ class PhoneUiModel {
   var route by mutableStateOf(Route.Unpaired)
   var cameraGranted by mutableStateOf(false)
   var scanError by mutableStateOf<String?>(null)
-  var setup by mutableStateOf(SetupState("", false, false, false, false, false))
+  var setup by mutableStateOf(SetupState("", false, false, false, false, null, false))
   var enter by mutableStateOf(EnterCodeState("", "", Probe.Idle, null, false))
-  var home by mutableStateOf(HomeState("", DotState.Off, "Not connected", false, false, false, false, false, emptyList()))
-  var settings by mutableStateOf(SettingsState("", "", "", false, 0, "", null, true, "", emptyList()))
+  var home by mutableStateOf(HomeState("", DotState.Off, "Not connected", false, false, false, false, emptyList()))
+  var settings by mutableStateOf(SettingsState("", "", "", false, 0, "", null, "", emptyList()))
   var approval by mutableStateOf<ApprovalCard?>(null)
 }
 
@@ -37,20 +37,15 @@ interface PhoneUiActions {
   fun connect()
   fun allowNotifications()
   fun allowBackground()
-  fun allowAccessibility()
   fun allowFiles()
+  fun shizukuAction()
   fun finishSetup()
   fun togglePause()
-  fun openAccessibilitySettings()
-  fun openFilesSettings()
-  fun openNotificationListenerSettings()
   fun openCameraPermission()
   fun openSettings()
   fun saveName(name: String)
   fun saveRelay(url: String)
   fun autoApprove(on: Boolean)
-  fun shellAction()
-  fun selfUpdate(on: Boolean)
   fun unpair()
   fun forgetAll()
   fun approve(jobId: String)
@@ -76,16 +71,15 @@ fun PhoneRoot(m: PhoneUiModel, a: PhoneUiActions) {
         m.setup,
         a::allowNotifications,
         a::allowBackground,
-        a::allowAccessibility,
         a::allowFiles,
+        a::shizukuAction,
         a::finishSetup,
       )
       Route.Home -> HomeScreen(
         m.home,
         a::togglePause,
-        a::openAccessibilitySettings,
-        a::openFilesSettings,
-        a::openNotificationListenerSettings,
+        a::shizukuAction,
+        a::allowFiles,
         a::openCameraPermission,
         a::openSettings,
       )
@@ -95,8 +89,7 @@ fun PhoneRoot(m: PhoneUiModel, a: PhoneUiActions) {
         a::saveName,
         a::saveRelay,
         a::autoApprove,
-        a::shellAction,
-        a::selfUpdate,
+        a::shizukuAction,
         a::unpair,
         a::forgetAll,
       )

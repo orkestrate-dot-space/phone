@@ -1,5 +1,5 @@
 {
-  "versionCode": 43,
-  "versionName": "0.19.0",
-  "notes": "Accessibility screen/act/apps, /sdcard files, notifications, clipboard, handoff, CameraX QR scanner, 100% Compose UI"
+  "versionCode": 44,
+  "versionName": "0.20.0",
+  "notes": "Play-Protect-safe slim companion APK: Shizuku + SAF folder picker + CameraX QR scanner"
 }

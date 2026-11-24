@@ -4,7 +4,6 @@ import android.Manifest
 import android.app.KeyguardManager
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -14,39 +13,26 @@ import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
-import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
-import android.provider.Settings
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 object AppTools {
-  fun permissionsMap(ctx: Context, adb: AdbShell): JSONObject = JSONObject()
-    .put("accessibility", isAccessibilityEnabled(ctx))
-    .put("files", Build.VERSION.SDK_INT < 30 || Environment.isExternalStorageManager())
-    .put("notifications", isNotificationListenerEnabled(ctx))
-    .put("postNotifications", Build.VERSION.SDK_INT < 33 ||
-      ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
-    .put("background", ctx.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(ctx.packageName))
-    .put("camera", ctx.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
-    .put("shell", adb.serial != null)
-
-  fun isAccessibilityEnabled(ctx: Context): Boolean {
-    if (PhoneAccessibilityService.instance != null) return true
-    val enabled = Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: return false
-    val cn = ComponentName(ctx, PhoneAccessibilityService::class.java).flattenToString()
-    return enabled.split(':').any { it.equals(cn, ignoreCase = true) }
-  }
-
-  fun isNotificationListenerEnabled(ctx: Context): Boolean {
-    if (PhoneNotificationService.instance != null) return true
-    val enabled = Settings.Secure.getString(ctx.contentResolver, "enabled_notification_listeners") ?: return false
-    val cn = ComponentName(ctx, PhoneNotificationService::class.java).flattenToString()
-    return enabled.split(':').any { it.equals(cn, ignoreCase = true) }
+  fun permissionsMap(ctx: Context, store: Store, shizuku: ShizukuBridge): JSONObject {
+    val shizukuGranted = shizuku.hasPermission()
+    return JSONObject()
+      .put("shizuku", shizukuGranted)
+      .put("shizukuInstalled", shizuku.isInstalled())
+      .put("shizukuRunning", shizuku.isRunning())
+      .put("files", store.safTreeUri != null || shizukuGranted)
+      .put("postNotifications", Build.VERSION.SDK_INT < 33 ||
+        ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
+      .put("background", ctx.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(ctx.packageName))
+      .put("camera", ctx.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
   }
 
   fun batteryInfo(ctx: Context): JSONObject {
@@ -61,7 +47,7 @@ object AppTools {
       .put("tempC", ((b?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1)) / 10.0)
   }
 
-  fun deviceInfo(ctx: Context, store: Store, adb: AdbShell): JSONObject {
+  fun deviceInfo(ctx: Context, store: Store, shizuku: ShizukuBridge): JSONObject {
     val pm = ctx.getSystemService(PowerManager::class.java)
     val km = ctx.getSystemService(KeyguardManager::class.java)
     val cm = ctx.getSystemService(ConnectivityManager::class.java)
@@ -88,7 +74,7 @@ object AppTools {
       .put("battery", batteryInfo(ctx))
       .put("screen", JSONObject().put("interactive", pm.isInteractive).put("locked", km.isKeyguardLocked))
       .put("network", net)
-      .put("permissions", permissionsMap(ctx, adb))
+      .put("permissions", permissionsMap(ctx, store, shizuku))
   }
 
   fun appsManage(ctx: Context, params: JSONObject): JSONObject {

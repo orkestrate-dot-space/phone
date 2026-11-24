@@ -91,11 +91,12 @@ data class SetupState(
   val relayHost: String,
   val notifications: Boolean,
   val background: Boolean,
-  val accessibility: Boolean,
   val files: Boolean,
+  val shizuku: Boolean,
+  val shizukuActionLabel: String?,
   val tried: Boolean,
 ) {
-  val complete get() = notifications && background && accessibility && files && tried
+  val complete get() = notifications && background && files && shizuku && tried
 }
 
 /** B · post-pair live checklist. Auto-checks off as permissions are granted. */
@@ -104,8 +105,8 @@ fun SetupScreen(
   s: SetupState,
   onAllowNotifications: () -> Unit,
   onAllowBackground: () -> Unit,
-  onAllowAccessibility: () -> Unit,
   onAllowFiles: () -> Unit,
+  onShizukuAction: () -> Unit,
   onFinish: () -> Unit,
 ) {
   Screen(
@@ -131,16 +132,16 @@ fun SetupScreen(
       OrkRowText("Notifications & background", "Keeps the link up and delivers handoff cards.")
     }
     OrkRow(
-      first = false, lead = { OrkStepNum(3, s.accessibility) },
-      trailing = if (s.accessibility) null else ({ OrkPill("Enable", onAllowAccessibility, kind = PillKind.Quiet, small = true) }),
+      first = false, lead = { OrkStepNum(3, s.files) },
+      trailing = if (s.files) null else ({ OrkPill("Pick folder", onAllowFiles, kind = PillKind.Quiet, small = true) }),
     ) {
-      OrkRowText("Screen control", "Lets your agent see and operate apps.")
+      OrkRowText("Folder access", "Lets your agent read and write the folder you pick.")
     }
     OrkRow(
-      first = false, lead = { OrkStepNum(4, s.files) },
-      trailing = if (s.files) null else ({ OrkPill("Allow", onAllowFiles, kind = PillKind.Quiet, small = true) }),
+      first = false, lead = { OrkStepNum(4, s.shizuku) },
+      trailing = if (s.shizuku || s.shizukuActionLabel == null) null else ({ OrkPill(s.shizukuActionLabel, onShizukuAction, kind = PillKind.Quiet, small = true) }),
     ) {
-      OrkRowText("Files", "Read and write shared storage (/sdcard).")
+      OrkRowText("Screen & shell (Shizuku)", "Optional: lets your agent see/tap apps and run shell commands.")
     }
     OrkRow(first = false, lead = { OrkStepNum(5, s.tried) }) {
       Text("Try it", style = OrkType.rowTitle)
@@ -217,9 +218,8 @@ data class HomeState(
   val link: DotState,
   val linkText: String,
   val paused: Boolean,
-  val accessibility: Boolean,
+  val shizuku: Boolean,
   val files: Boolean,
-  val notifications: Boolean,
   val camera: Boolean,
   val recent: List<RecentJob>,
 )
@@ -229,9 +229,8 @@ data class HomeState(
 fun HomeScreen(
   s: HomeState,
   onTogglePause: () -> Unit,
-  onOpenAccessibility: () -> Unit,
-  onOpenFiles: () -> Unit,
-  onOpenNotifications: () -> Unit,
+  onShizukuAction: () -> Unit,
+  onPickFolder: () -> Unit,
   onOpenCameraPerm: () -> Unit,
   onSettings: () -> Unit,
 ) {
@@ -260,9 +259,8 @@ fun HomeScreen(
     }
 
     Text("Capabilities", style = OrkType.label, modifier = Modifier.padding(top = 28.dp, bottom = 4.dp))
-    CapRow(first = true, icon = OrkIcons.eye, title = "Screen control", ok = s.accessibility, onClick = onOpenAccessibility)
-    CapRow(first = false, icon = OrkIcons.folder, title = "Files (/sdcard)", ok = s.files, onClick = onOpenFiles)
-    CapRow(first = false, icon = OrkIcons.bell, title = "Notifications", ok = s.notifications, onClick = onOpenNotifications)
+    CapRow(first = true, icon = OrkIcons.eye, title = "Screen & shell (Shizuku)", ok = s.shizuku, onClick = onShizukuAction)
+    CapRow(first = false, icon = OrkIcons.folder, title = "Folder access", ok = s.files, onClick = onPickFolder)
     CapRow(first = false, icon = OrkIcons.camera, title = "Camera", ok = s.camera, onClick = onOpenCameraPerm)
 
     Text("Recent", style = OrkType.label, modifier = Modifier.padding(top = 28.dp, bottom = 4.dp))
@@ -312,9 +310,8 @@ data class SettingsState(
   val relayUrl: String,
   val autoApprove: Boolean,
   val blockedCount: Int,
-  val shellStatus: String,
-  val shellActionLabel: String?,
-  val selfUpdate: Boolean,
+  val shizukuStatus: String,
+  val shizukuActionLabel: String?,
   val buildInfo: String,
   val logs: List<String>,
 )
@@ -327,8 +324,7 @@ fun SettingsScreen(
   onSaveName: (String) -> Unit,
   onSaveRelay: (String) -> Unit,
   onAutoApprove: (Boolean) -> Unit,
-  onShellAction: () -> Unit,
-  onSelfUpdate: (Boolean) -> Unit,
+  onShizukuAction: () -> Unit,
   onUnpair: () -> Unit,
   onForgetAll: () -> Unit,
 ) {
@@ -386,14 +382,11 @@ fun SettingsScreen(
     }
     if (devOpen) {
       OrkRow(first = false, vertical = 12.dp) {
-        OrkRowText("Wireless ADB shell", s.shellStatus)
-        if (s.shellActionLabel != null) {
+        OrkRowText("Shizuku bridge", s.shizukuStatus)
+        if (s.shizukuActionLabel != null) {
           Spacer(Modifier.height(10.dp))
-          OrkPill(s.shellActionLabel, onShellAction, kind = PillKind.Quiet, small = true)
+          OrkPill(s.shizukuActionLabel, onShizukuAction, kind = PillKind.Quiet, small = true)
         }
-      }
-      OrkRow(first = false, trailing = { OrkSwitch(s.selfUpdate, "Agent self-update", onSelfUpdate) }) {
-        OrkRowText("Agent self-update", "Install updates pushed from your relay without a tap.")
       }
       OrkRow(
         first = false,

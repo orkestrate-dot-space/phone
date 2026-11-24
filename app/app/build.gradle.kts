@@ -20,8 +20,8 @@ android {
     applicationId = "space.orkestrate.phone"
     minSdk = 29
     targetSdk = 36
-    versionCode = 43
-    versionName = "0.19.0"
+    versionCode = 44
+    versionName = "0.20.0"
   }
 
   signingConfigs {
@@ -67,6 +67,9 @@ dependencies {
   implementation("androidx.compose.ui:ui-tooling-preview")
   implementation("androidx.activity:activity-compose:1.10.1")
   implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+  implementation("androidx.documentfile:documentfile:1.0.1")
+  implementation("dev.rikka.shizuku:api:13.1.5")
+  implementation("dev.rikka.shizuku:provider:13.1.5")
   implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
   val camerax = "1.4.2"

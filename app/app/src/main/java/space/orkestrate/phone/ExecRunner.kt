@@ -4,11 +4,11 @@ import android.app.NotificationManager
 import android.content.Context
 import android.util.Log
 
-/** Shared exec engine: used by the activity (dialog-approved) and the service (auto-approved). */
+/** Shared exec engine: uses Shizuku (uid 2000) when granted, else app-UID fallback. */
 class ExecRunner(
   private val ctx: Context,
   private val relay: Relay,
-  private val adb: AdbShell,
+  private val shizuku: ShizukuBridge,
   private val store: Store,
 ) {
   interface Sink {
@@ -34,7 +34,7 @@ class ExecRunner(
       try {
         val cmd = argv.toMutableList()
         val bin = cmd[0]
-        val shellUp = adb.serial != null
+        val shellUp = shizuku.hasPermission()
         val allowed = if (shellUp) SHELL_ALLOW else APP_ALLOW
         if ("/" !in bin) {
           if (bin !in allowed) throw IllegalArgumentException("not allowed: $bin")
@@ -44,13 +44,11 @@ class ExecRunner(
         }
         val params = relay.jobParams(jobId)
         val timeoutSec = (params?.optInt("timeoutSec", 30) ?: 30).coerceIn(5, 120)
-        // Tier S (shell-UID) when the embedded ADB channel is up, else app-UID.
-        val sh = if (shellUp) adb.exec(cmd, timeoutSec) else null
-        if (sh != null && !adb.looksDead(sh)) {
-          finishExec(jobId, sh.exit, sh.stdout.toByteArray(), sh.stderr.toByteArray(), "shell", sink)
+        if (shellUp) {
+          val sh = shizuku.exec(cmd, timeoutSec)
+          finishExec(jobId, sh.exit, sh.stdout.toByteArray(), sh.stderr.toByteArray(), "shizuku", sink)
           return@Thread
         }
-        if (sh != null) adb.drop()
         val proc = ProcessBuilder(cmd).redirectErrorStream(false).start()
         val out = java.io.ByteArrayOutputStream()
         val err = java.io.ByteArrayOutputStream()

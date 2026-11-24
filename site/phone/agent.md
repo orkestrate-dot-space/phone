@@ -45,7 +45,7 @@ phone pair --no-wait
 
 (MCP: call `pair`.) It prints a QR code, a link and a one-time code valid for 10 minutes. Show the QR block to the user exactly as printed, inside a code block. If your interface cannot draw it, give the user the `PNG` path or the `Link` line instead.
 
-Tell the user: "Open Orkestrate Phone and tap **Scan QR code** (or scan with your phone's camera). If the app isn't installed yet, get it from the link that opens, install it, then scan again. In the app, grant Notifications, Screen control (Accessibility), and Files when prompted."
+Tell the user: "Open Orkestrate Phone and tap **Scan QR code** (or scan with your phone's camera). If the app isn't installed yet, get it from the link that opens, install it, then scan again. In the app, grant Notifications, pick a shared folder for Files, and optionally install free Shizuku from Google Play for screen control, notifications, and shell."
 
 Then wait for the phone:
 
@@ -62,7 +62,7 @@ phone device
 phone screen
 ```
 
-Report the result to the user (e.g. battery, model, and whether `accessibility` and `files` are enabled). You are done.
+Report the result to the user (e.g. battery, model, and whether Shizuku and folder access are enabled). You are done.
 
 ## Tools
 
@@ -72,7 +72,7 @@ Report the result to the user (e.g. battery, model, and whether `accessibility` 
 - `notifications`, `clipboard`: list/dismiss/reply to notifications; get/set clipboard.
 - `handoff`: pause and ask the user to complete a step on glass (login, 2FA, payment, confirmation).
 - `capture_photo`: on-glass approved camera shot.
-- `exec`, `update`: optional shell tier (Developer settings) and relay-pushed self-update.
+- `exec`: optional shell tier (via Shizuku `uid 2000`) and app-tier recon commands.
 
 ## When something fails
 
@@ -80,8 +80,8 @@ Report the result to the user (e.g. battery, model, and whether `accessibility` 
 |---|---|
 | `relay-not-running` | `phone start`, then retry. `phone logs` shows why it stopped. |
 | `paused-by-user` | The user tapped Pause in the app or notification shade. Ask them to tap Resume. |
-| `accessibility-permission-required` | Ask the user to tap **Screen control** on the app's Home screen to enable Accessibility. |
-| `files-permission-required` | Ask the user to tap **Files (/sdcard)** on the app's Home screen to allow All files access. |
+| `shizuku-required` / `shizuku-permission-required` | Ask the user to tap **Shizuku** on the app's Home screen to install/start Shizuku and grant permission. |
+| `folder-not-granted` | Ask the user to tap **Files** on the app's Home screen to pick a shared folder. |
 | `code expired or voided` | Run `phone pair --no-wait` again for a new QR. Five wrong tries void every pending code. |
 | `no-device` | Nothing is paired yet. Do step 4. |
 | Phone cannot reach the relay | Rerun `phone doctor`. On `lan`, the phone must share the Wi-Fi; otherwise set a public URL (step 2). |

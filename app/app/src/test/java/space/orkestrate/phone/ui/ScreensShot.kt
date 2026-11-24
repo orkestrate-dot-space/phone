@@ -30,9 +30,8 @@ class ScreensShot {
     link = DotState.On,
     linkText = "Connected to 6ace59c9…opentunnel.xyz",
     paused = false,
-    accessibility = true,
+    shizuku = true,
     files = true,
-    notifications = true,
     camera = true,
     recent = listOf(
       RecentJob("screen.observe", "Just now"),
@@ -44,7 +43,7 @@ class ScreensShot {
   @Test fun a_unpaired() = shot("a-unpaired") { UnpairedScreen({}, {}) }
 
   @Test fun b_setup() = shot("b-setup") {
-    SetupScreen(SetupState("6ace59c9…opentunnel.xyz", true, true, true, false, false), {}, {}, {}, {}, {})
+    SetupScreen(SetupState("6ace59c9…opentunnel.xyz", true, true, true, false, "Get Shizuku", false), {}, {}, {}, {}, {})
   }
 
   @Test fun c_enterCode() = shot("c-enter-code") {
@@ -57,11 +56,11 @@ class ScreensShot {
     )
   }
 
-  @Test fun d_home() = shot("d-home") { HomeScreen(home, {}, {}, {}, {}, {}, {}) }
+  @Test fun d_home() = shot("d-home") { HomeScreen(home, {}, {}, {}, {}, {}) }
 
   @Test fun e_approval() = shot("e-approval") {
     Box(Modifier.fillMaxSize()) {
-      HomeScreen(home, {}, {}, {}, {}, {}, {})
+      HomeScreen(home, {}, {}, {}, {}, {})
       ApprovalSheet(
         ApprovalCard(
           "j1", "Take a photo?", "Nothing is captured until you take it.",
@@ -74,7 +73,7 @@ class ScreensShot {
 
   @Test fun f_handoff() = shot("f-handoff") {
     Box(Modifier.fillMaxSize()) {
-      HomeScreen(home, {}, {}, {}, {}, {}, {})
+      HomeScreen(home, {}, {}, {}, {}, {})
       ApprovalSheet(
         ApprovalCard(
           "j2", "Agent needs you.", "Sign in to your bank app, then tap Continue.",
@@ -93,13 +92,12 @@ class ScreensShot {
         relayUrl = "https://6ace59c9.opentunnel.xyz",
         autoApprove = false,
         blockedCount = 6,
-        shellStatus = "Optional Wi-Fi developer shell (logcat, dumpsys, pm).",
-        shellActionLabel = "Set up shell",
-        selfUpdate = true,
-        buildInfo = "v0.19.0 (build 43)",
+        shizukuStatus = "Install Shizuku (free on Google Play) for screen & shell control.",
+        shizukuActionLabel = "Get Shizuku",
+        buildInfo = "v0.20.0 (build 44)",
         logs = listOf("connected — Pixel 8", "screen.observe · job_123"),
       ),
-      {}, {}, {}, {}, {}, {}, {}, {},
+      {}, {}, {}, {}, {}, {}, {},
     )
   }
 

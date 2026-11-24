@@ -14,6 +14,8 @@ class Store(ctx: Context) {
   var name: String get() = p.getString("name", android.os.Build.MODEL) ?: android.os.Build.MODEL
     set(v) = put("name", v)
 
+  var safTreeUri: String? get() = p.getString("safTreeUri", null); set(v) = put("safTreeUri", v)
+
   var paused: Boolean
     get() = p.getBoolean("paused", false)
     set(v) = p.edit().putBoolean("paused", v).apply()
@@ -25,23 +27,6 @@ class Store(ctx: Context) {
   var autoApprove: Boolean
     get() = p.getBoolean("autoApprove", false)
     set(v) = p.edit().putBoolean("autoApprove", v).apply()
-
-  var adbSerial: String? get() = p.getString("adbSerial", null); set(v) = put("adbSerial", v)
-  var adbPaired: Boolean
-    get() = p.getBoolean("adbPaired", false)
-    set(v) = p.edit().putBoolean("adbPaired", v).apply()
-
-  var adbPairPort: Int
-    get() = p.getInt("adbPairPort", 0)
-    set(v) = p.edit().putInt("adbPairPort", v).apply()
-
-  var adbConnectPort: Int
-    get() = p.getInt("adbConnectPort", 0)
-    set(v) = p.edit().putInt("adbConnectPort", v).apply()
-
-  var allowSelfUpdate: Boolean
-    get() = p.getBoolean("allowSelfUpdate", true)
-    set(v) = p.edit().putBoolean("allowSelfUpdate", v).apply()
 
   /** Post-pairing checklist dismissed. Reset on unpair so a re-pair shows it again. */
   var setupDone: Boolean
@@ -56,7 +41,7 @@ class Store(ctx: Context) {
 
   fun clear() = p.edit()
     .remove("setupDone").remove("relayHttp").remove("deviceId").remove("token").remove("paused")
-    .remove("adbSerial").remove("adbPaired").remove("adbPairPort").remove("adbConnectPort")
+    .remove("safTreeUri")
     .apply()
 
   private fun put(k: String, v: String?) =

@@ -1,7 +1,6 @@
 package space.orkestrate.phone
 
 import android.Manifest
-import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Intent
@@ -18,7 +17,6 @@ import android.provider.MediaStore
 import android.provider.Settings
 import android.text.format.DateUtils
 import android.util.Base64
-import android.util.Log
 import android.view.HapticFeedbackConstants
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -30,6 +28,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
+import rikka.shizuku.Shizuku
 import space.orkestrate.phone.ui.ApprovalCard
 import space.orkestrate.phone.ui.DotState
 import space.orkestrate.phone.ui.HomeState
@@ -50,10 +49,10 @@ class MainActivity : ComponentActivity(), Relay.Listener {
   private lateinit var app: PhoneApp
   private lateinit var store: Store
   private lateinit var relay: Relay
-  private lateinit var adb: AdbShell
+  private lateinit var shizuku: ShizukuBridge
 
   private val ui = PhoneUiModel()
-  private var navMode: Route? = null // Scan, EnterCode, Settings when explicitly opened
+  private var navMode: Route? = null
   private var tried = false
   private var lastRelayState = "not paired"
   private val recent = ArrayDeque<Pair<String, Long>>()
@@ -66,6 +65,14 @@ class MainActivity : ComponentActivity(), Relay.Listener {
   private var pendingMaxPx = 1280
   private var pendingQuality = 80
 
+  private val shizukuBinderListener = Shizuku.OnBinderReceivedListener {
+    runOnUiThread { relay.sendState(); syncUi() }
+  }
+
+  private val shizukuPermListener = Shizuku.OnRequestPermissionResultListener { _, _ ->
+    runOnUiThread { relay.sendState(); syncUi() }
+  }
+
   private val reqNotifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
     syncUi()
   }
@@ -77,6 +84,22 @@ class MainActivity : ComponentActivity(), Relay.Listener {
       pendingPhotoJob = null
       if (granted) launchCamera(job)
       else { relay.reject(job, "camera denied"); cancelNotif(job); log("camera denied") }
+    }
+    syncUi()
+  }
+
+  private val pickFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+    if (uri != null) {
+      try {
+        contentResolver.takePersistableUriPermission(
+          uri,
+          Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+        )
+        store.safTreeUri = uri.toString()
+        relay.sendState()
+      } catch (e: Exception) {
+        toast("Folder permission failed: ${e.message}")
+      }
     }
     syncUi()
   }
@@ -121,8 +144,13 @@ class MainActivity : ComponentActivity(), Relay.Listener {
     app = application as PhoneApp
     store = app.store
     relay = app.relay
-    adb = app.adb
+    shizuku = app.shizuku
     app.uiListener = this
+
+    try {
+      Shizuku.addBinderReceivedListenerSticky(shizukuBinderListener)
+      Shizuku.addRequestPermissionResultListener(shizukuPermListener)
+    } catch (_: Throwable) {}
 
     onBackPressedDispatcher.addCallback(this, back)
     setContent { OrkTheme { PhoneRoot(ui, actions) } }
@@ -154,17 +182,16 @@ class MainActivity : ComponentActivity(), Relay.Listener {
   }
 
   override fun onDestroy() {
+    try {
+      Shizuku.removeBinderReceivedListener(shizukuBinderListener)
+      Shizuku.removeRequestPermissionResultListener(shizukuPermListener)
+    } catch (_: Throwable) {}
     if (app.uiListener === this) app.uiListener = null
     super.onDestroy()
   }
 
-  private fun hapticConfirm() {
-    window.decorView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-  }
-
-  private fun hapticReject() {
-    window.decorView.performHapticFeedback(HapticFeedbackConstants.REJECT)
-  }
+  private fun hapticConfirm() = window.decorView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+  private fun hapticReject() = window.decorView.performHapticFeedback(HapticFeedbackConstants.REJECT)
 
   private fun handleDeepLink(i: Intent?) {
     val d = i?.data ?: return
@@ -235,9 +262,14 @@ class MainActivity : ComponentActivity(), Relay.Listener {
   private fun notificationsAllowed() = Build.VERSION.SDK_INT < 33 ||
     checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
-  private fun filesAllowed() = Build.VERSION.SDK_INT < 30 || Environment.isExternalStorageManager()
-
   private fun bgAllowed() = getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
+
+  private fun shizukuSummary(): Pair<String, String?> = when {
+    shizuku.hasPermission() -> "Connected (uid 2000)" to null
+    shizuku.isRunning() -> "Shizuku is running — tap Allow to grant access." to "Allow"
+    shizuku.isInstalled() -> "Shizuku is installed — open it and tap Start." to "Open Shizuku"
+    else -> "Install Shizuku (free on Google Play) for screen & shell control." to "Get Shizuku"
+  }
 
   private fun syncUi() {
     val route = when {
@@ -253,18 +285,19 @@ class MainActivity : ComponentActivity(), Relay.Listener {
     ui.route = route
     back.isEnabled = navMode != null
 
-    val accOn = AppTools.isAccessibilityEnabled(this)
-    val filesOn = filesAllowed()
-    val notifListenerOn = AppTools.isNotificationListenerEnabled(this)
+    val shizukuOk = shizuku.hasPermission()
+    val filesOk = store.safTreeUri != null || shizukuOk
     val camOn = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
     ui.cameraGranted = camOn
+    val (shizukuStatus, shizukuAction) = shizukuSummary()
 
     ui.setup = SetupState(
       relayHost = shortHost(store.relayHttp),
       notifications = notificationsAllowed(),
       background = bgAllowed(),
-      accessibility = accOn,
-      files = filesOn,
+      files = filesOk,
+      shizuku = shizukuOk,
+      shizukuActionLabel = shizukuAction,
       tried = tried,
     )
 
@@ -284,9 +317,8 @@ class MainActivity : ComponentActivity(), Relay.Listener {
         else -> lastRelayState.replaceFirstChar { it.uppercase() }
       },
       paused = store.paused,
-      accessibility = accOn,
-      files = filesOn,
-      notifications = notifListenerOn,
+      shizuku = shizukuOk,
+      files = filesOk,
       camera = camOn,
       recent = recent.map { (tool, t) ->
         RecentJob(
@@ -299,32 +331,17 @@ class MainActivity : ComponentActivity(), Relay.Listener {
 
     val pkg = packageManager.getPackageInfo(packageName, 0)
     val vc = if (Build.VERSION.SDK_INT >= 28) pkg.longVersionCode else @Suppress("DEPRECATION") pkg.versionCode.toLong()
-    val (shellStatus, shellAction) = shellSummary()
     ui.settings = SettingsState(
       name = store.name,
       deviceId = store.deviceId ?: "",
       relayUrl = store.relayHttp ?: "",
       autoApprove = store.autoApprove,
       blockedCount = store.blockedPackages.size,
-      shellStatus = shellStatus,
-      shellActionLabel = shellAction,
-      selfUpdate = store.allowSelfUpdate,
+      shizukuStatus = shizukuStatus,
+      shizukuActionLabel = shizukuAction,
       buildInfo = "v${pkg.versionName} (build $vc)",
       logs = logLines.toList(),
     )
-  }
-
-  private fun shellSummary(): Pair<String, String?> {
-    val devOn = try {
-      Settings.Global.getInt(contentResolver, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1
-    } catch (_: Exception) { true }
-    return when {
-      adb.serial != null -> "Connected · ${adb.serial} (shell-UID)" to null
-      !adb.serverPresent() -> "Server binary missing" to null
-      !devOn -> "Enable Developer Options in Android Settings first." to "Open Settings"
-      !adb.isWirelessOn() || !store.adbPaired -> "Optional Wi-Fi developer shell (logcat, dumpsys, pm)." to "Set up shell"
-      else -> "Paired · connecting…" to null
-    }
   }
 
   private val actions = object : PhoneUiActions {
@@ -368,8 +385,24 @@ class MainActivity : ComponentActivity(), Relay.Listener {
       else startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
     }
     override fun allowBackground() = requestBgExemption()
-    override fun allowAccessibility() = openAccessibilitySettings()
-    override fun allowFiles() = openFilesSettings()
+    override fun allowFiles() { pickFolder.launch(null) }
+    override fun shizukuAction() {
+      when {
+        shizuku.hasPermission() -> toast("Shizuku is connected")
+        shizuku.isRunning() -> shizuku.requestPermission(101)
+        shizuku.isInstalled() -> {
+          packageManager.getLaunchIntentForPackage(ShizukuBridge.PKG)?.let { startActivity(it) }
+            ?: toast("Open Shizuku app")
+        }
+        else -> {
+          try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=${ShizukuBridge.PKG}")))
+          } catch (_: Exception) {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=${ShizukuBridge.PKG}")))
+          }
+        }
+      }
+    }
     override fun finishSetup() { store.setupDone = true; syncUi() }
     override fun togglePause() {
       store.paused = !store.paused
@@ -377,30 +410,9 @@ class MainActivity : ComponentActivity(), Relay.Listener {
       app.ensureService()
       syncUi()
     }
-    override fun openAccessibilitySettings() {
-      try { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-      catch (_: Exception) { toast("Open Android Accessibility settings") }
-    }
-    override fun openFilesSettings() {
-      if (Build.VERSION.SDK_INT >= 30) {
-        try {
-          startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")))
-        } catch (_: Exception) {
-          startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
-        }
-      }
-    }
-    override fun openNotificationListenerSettings() {
-      try { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
-      catch (_: Exception) { toast("Open Notification access in Android Settings") }
-    }
     override fun openCameraPermission() { reqCameraPerm.launch(Manifest.permission.CAMERA) }
     override fun openSettings() { navMode = Route.Settings; syncUi() }
-    override fun saveName(name: String) {
-      store.name = name
-      log("name → $name")
-      syncUi()
-    }
+    override fun saveName(name: String) { store.name = name; log("name → $name"); syncUi() }
     override fun saveRelay(url: String) {
       relay.disconnect()
       store.relayHttp = PairingUri.normalizeRelay(url)
@@ -409,45 +421,18 @@ class MainActivity : ComponentActivity(), Relay.Listener {
       syncUi()
     }
     override fun autoApprove(on: Boolean) { store.autoApprove = on; syncUi() }
-    override fun shellAction() = openWirelessAdbSettings()
-    override fun selfUpdate(on: Boolean) { store.allowSelfUpdate = on; syncUi() }
     override fun unpair() {
-      try { adb.disconnectAll() } catch (_: Exception) {}
-      adb.drop(); ShellPairing.reset()
       relay.disconnect(); store.clearRelay()
       stopService(Intent(this@MainActivity, RelayService::class.java))
-      navMode = null
-      syncUi()
+      navMode = null; syncUi()
     }
     override fun forgetAll() {
-      try { adb.disconnectAll() } catch (_: Exception) {}
-      adb.drop()
-      try { java.io.File(filesDir, ".android").deleteRecursively() } catch (_: Exception) {}
-      ShellPairing.reset()
       relay.disconnect(); store.clear()
       stopService(Intent(this@MainActivity, RelayService::class.java))
-      navMode = null; recent.clear()
-      syncUi()
+      navMode = null; recent.clear(); syncUi()
     }
     override fun approve(jobId: String) { hapticConfirm(); ui.approval = null; cardActions.remove(jobId)?.first?.invoke() }
     override fun reject(jobId: String) { hapticReject(); ui.approval = null; cardActions.remove(jobId)?.second?.invoke() }
-  }
-
-  private fun openWirelessAdbSettings() {
-    val devOn = try {
-      Settings.Global.getInt(contentResolver, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1
-    } catch (_: Exception) { true }
-    if (!devOn) {
-      try { startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)) } catch (_: Exception) {}
-      return
-    }
-    try {
-      val i = Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
-      i.putExtra(":settings:fragment_args_key", "toggle_adb_wireless")
-      startActivity(i)
-    } catch (_: Exception) {
-      try { startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) } catch (_: Exception) {}
-    }
   }
 
   private fun requestBgExemption() {
@@ -467,7 +452,6 @@ class MainActivity : ComponentActivity(), Relay.Listener {
       p.has("message") -> "human.handoff"
       p.optString("action") == "delete" -> "files.op"
       p.has("argv") -> "exec.run"
-      p.has("versionCode") -> "app.update"
       else -> "photo.capture"
     }
   }
@@ -508,19 +492,10 @@ class MainActivity : ComponentActivity(), Relay.Listener {
         }
         "exec.run" -> {
           val argv = relay.jobParams(jobId)?.optJSONArray("argv")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList()
-          val tier = if (adb.serial != null) "shell-UID" else "app sandbox"
+          val tier = if (shizuku.hasPermission()) "shizuku" else "app sandbox"
           showCard(ApprovalCard(jobId, "Run a command?", "Runs as $tier.", listOf("Tool" to "exec.run", "Command" to argv.joinToString(" ")), "Run command", false)) {
-            ExecRunner(this, relay, adb, store).runExec(jobId, argv, object : ExecRunner.Sink {
+            ExecRunner(this, relay, shizuku, store).runExec(jobId, argv, object : ExecRunner.Sink {
               override fun note(s: String) = runOnUiThread { log(s) }
-            })
-          }
-        }
-        "app.update" -> {
-          val v = relay.jobParams(jobId)?.optString("versionName", "?") ?: "?"
-          showCard(ApprovalCard(jobId, "Update Orkestrate Phone?", "Installs v$v and restarts.", listOf("Tool" to "app.update", "Version" to "v$v"), "Update app", false)) {
-            SelfUpdate(this, relay, adb, store).run(jobId, object : SelfUpdate.Sink {
-              override fun note(s: String) = runOnUiThread { log(s) }
-              override fun progress(pct: Int) {}
             })
           }
         }

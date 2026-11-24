@@ -20,13 +20,12 @@ import java.util.concurrent.TimeUnit
 class Relay(
   private val ctx: Context,
   private val store: Store,
-  private val adb: AdbShell,
+  private val shizuku: ShizukuBridge,
 ) {
   interface Listener {
     fun onState(s: String)
     fun onJob(desc: String)
     fun onLog(s: String)
-    /** Gated job arrived. Show card/notification; call exactly one of approve/reject. */
     fun onApproval(jobId: String, capability: String)
   }
 
@@ -34,12 +33,11 @@ class Relay(
   @Volatile private var ws: WebSocket? = null
   @Volatile private var wantUp = false
 
-  private val fileStore = FileStore()
+  private val fileStore = SafFileStore(ctx, store, shizuku)
 
-  /** jobId -> (socket, job) for jobs awaiting the human tap. */
   private val approvals = mutableMapOf<String, Pair<WebSocket, JSONObject>>()
 
-  private val ALWAYS_GATED = setOf("photo.capture", "human.handoff", "exec.run", "app.update")
+  private val ALWAYS_GATED = setOf("photo.capture", "human.handoff", "exec.run")
 
   fun pendingApproval(id: String): Boolean = synchronized(approvals) { approvals.containsKey(id) }
 
@@ -58,7 +56,7 @@ class Relay(
     val frame = JSONObject()
       .put("t", "state")
       .put("paused", store.paused)
-      .put("permissions", AppTools.permissionsMap(ctx, adb))
+      .put("permissions", AppTools.permissionsMap(ctx, store, shizuku))
     try { w.send(frame.toString()) } catch (_: Exception) {}
   }
 
@@ -147,14 +145,13 @@ class Relay(
           .put("human.handoff")
           .put("photo.capture")
           .put("exec.run")
-          .put("app.update")
         val hello = JSONObject()
           .put("t", "hello")
           .put("deviceId", store.deviceId)
           .put("name", store.name)
           .put("appVersion", vcode)
           .put("paused", store.paused)
-          .put("permissions", AppTools.permissionsMap(ctx, adb))
+          .put("permissions", AppTools.permissionsMap(ctx, store, shizuku))
           .put("caps", caps)
         w.send(hello.toString())
       }
@@ -226,14 +223,12 @@ class Relay(
       .apply { if (ok && data != null) put("data", data) else put("error", err ?: "failed") }
       .toString()
 
-  /** Human tapped Approve with captured data. Only path that completes a gated job. */
   fun approve(id: String, data: JSONObject) {
     val (w, _) = synchronized(approvals) { approvals.remove(id) } ?: return
     Log.d("phone", "approved by tap: $id")
     w.send(result(id, true, data, null))
   }
 
-  /** Human tapped Reject (or the flow aborted). Only other path that ends a gated job. */
   fun reject(id: String, why: String = "rejected") {
     val (w, _) = synchronized(approvals) { approvals.remove(id) } ?: return
     Log.d("phone", "rejected by tap: $id ($why)")
@@ -245,29 +240,18 @@ class Relay(
   private fun execUngated(cap: String, params: JSONObject): JSONObject {
     return when (cap) {
       "battery.get" -> AppTools.batteryInfo(ctx)
-      "device.info" -> AppTools.deviceInfo(ctx, store, adb)
-      "screen.observe" -> {
-        val svc = PhoneAccessibilityService.instance
-          ?: throw IllegalStateException("accessibility-permission-required")
-        svc.observe(
-          store = store,
-          screenshot = params.optBoolean("screenshot", false),
-          maxPx = params.optInt("maxPx", 1080),
-          quality = params.optInt("quality", 75),
-        )
-      }
-      "screen.act" -> {
-        val svc = PhoneAccessibilityService.instance
-          ?: throw IllegalStateException("accessibility-permission-required")
-        svc.act(store, params)
-      }
+      "device.info" -> AppTools.deviceInfo(ctx, store, shizuku)
+      "screen.observe" -> ShizukuScreen.observe(
+        shizuku = shizuku,
+        store = store,
+        screenshot = params.optBoolean("screenshot", false),
+        maxPx = params.optInt("maxPx", 1080),
+        quality = params.optInt("quality", 75),
+      )
+      "screen.act" -> ShizukuScreen.act(shizuku, params)
       "apps.manage" -> AppTools.appsManage(ctx, params)
       "files.op" -> fileStore.exec(params)
-      "notifications.op" -> {
-        val svc = PhoneNotificationService.instance
-          ?: throw IllegalStateException("notifications-permission-required")
-        svc.exec(params)
-      }
+      "notifications.op" -> ShizukuScreen.notifications(shizuku, params)
       "clipboard.op" -> AppTools.clipboardOp(ctx, params)
       else -> throw IllegalArgumentException("unknown-capability: $cap")
     }
