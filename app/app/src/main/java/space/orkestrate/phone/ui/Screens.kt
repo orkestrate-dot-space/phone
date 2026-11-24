@@ -222,6 +222,8 @@ data class HomeState(
   val files: Boolean,
   val camera: Boolean,
   val recent: List<RecentJob>,
+  val updateBanner: String? = null,
+  val updateProgress: Float? = null,
 )
 
 /** D · home, paired. */
@@ -233,6 +235,7 @@ fun HomeScreen(
   onPickFolder: () -> Unit,
   onOpenCameraPerm: () -> Unit,
   onSettings: () -> Unit,
+  onUpdateBanner: () -> Unit = {},
 ) {
   Screen(topBar = { OrkTopBar { OrkIconButton(OrkIcons.sliders, "Settings", onSettings) } }) {
     OrkHeading(
@@ -256,6 +259,18 @@ fun HomeScreen(
         small = true,
         icon = if (s.paused) OrkIcons.play else OrkIcons.pause,
       )
+    }
+    if (s.updateBanner != null) {
+      Spacer(Modifier.height(14.dp))
+      OrkRow(first = true, modifier = Modifier.clickable(role = Role.Button, onClick = onUpdateBanner)) {
+        OrkRowText("App update", s.updateBanner)
+        if (s.updateProgress != null) {
+          Spacer(Modifier.height(8.dp))
+          Box(Modifier.fillMaxWidth().height(3.dp).clip(CircleShape).background(Ork.rule)) {
+            Box(Modifier.fillMaxWidth(s.updateProgress.coerceIn(0f, 1f)).height(3.dp).background(Ork.ink))
+          }
+        }
+      }
     }
 
     Text("Capabilities", style = OrkType.label, modifier = Modifier.padding(top = 28.dp, bottom = 4.dp))
@@ -314,6 +329,12 @@ data class SettingsState(
   val shizukuActionLabel: String?,
   val buildInfo: String,
   val logs: List<String>,
+  val autoUpdate: Boolean = true,
+  val updateStatus: String = "",
+  val updateProgress: Float? = null,
+  val updateIndeterminate: Boolean = false,
+  val updateBusy: Boolean = false,
+  val updateActionLabel: String = "Check for updates",
 )
 
 /** F · 100% Compose Settings screen. */
@@ -327,6 +348,8 @@ fun SettingsScreen(
   onShizukuAction: () -> Unit,
   onUnpair: () -> Unit,
   onForgetAll: () -> Unit,
+  onAutoUpdate: (Boolean) -> Unit = {},
+  onUpdateAction: () -> Unit = {},
 ) {
   var nameDraft by remember(s.name) { mutableStateOf(s.name) }
   var relayDraft by remember(s.relayUrl) { mutableStateOf(s.relayUrl) }
@@ -369,6 +392,29 @@ fun SettingsScreen(
     }
     OrkRow(first = false, lead = { Icon(OrkIcons.shield, null, tint = Ork.icon, modifier = Modifier.size(18.dp)) }) {
       OrkRowText("Blocked apps", "${s.blockedCount} sensitive apps protected (wallet, authenticators, password managers).")
+    }
+
+    Text("Updates", style = OrkType.label, modifier = Modifier.padding(top = 20.dp, bottom = 4.dp))
+    OrkRow(first = true, trailing = { OrkSwitch(s.autoUpdate, "Auto-update", onAutoUpdate) }) {
+      OrkRowText("Auto-update", "Checks automatically and installs silently via Shizuku.")
+    }
+    OrkRow(first = false, vertical = 12.dp) {
+      OrkRowText("App version", s.updateStatus.ifBlank { s.buildInfo })
+      if (s.updateProgress != null) {
+        Spacer(Modifier.height(10.dp))
+        Box(Modifier.fillMaxWidth().height(3.dp).clip(CircleShape).background(Ork.rule)) {
+          Box(Modifier.fillMaxWidth(s.updateProgress.coerceIn(0f, 1f)).height(3.dp).background(Ork.ink))
+        }
+      } else if (s.updateIndeterminate) {
+        Spacer(Modifier.height(10.dp))
+        androidx.compose.material3.LinearProgressIndicator(
+          modifier = Modifier.fillMaxWidth().height(3.dp).clip(CircleShape),
+          color = Ork.ink,
+          trackColor = Ork.rule,
+        )
+      }
+      Spacer(Modifier.height(10.dp))
+      OrkPill(s.updateActionLabel, onUpdateAction, kind = PillKind.Quiet, small = true, enabled = !s.updateBusy)
     }
 
     Text("Developer", style = OrkType.label, modifier = Modifier.padding(top = 20.dp, bottom = 4.dp))

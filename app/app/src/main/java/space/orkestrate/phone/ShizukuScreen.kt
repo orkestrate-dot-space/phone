@@ -88,6 +88,13 @@ object ShizukuScreen {
     if (dump.exit != 0 || dump.stdout.isBlank()) {
       throw IllegalStateException("uiautomator dump failed: ${dump.stderr.take(200)}")
     }
+    val resolvedPkg = pkg.ifEmpty { extractPackageFromXml(dump.stdout) }
+    if (resolvedPkg in store.blockedPackages) {
+      return JSONObject()
+        .put("blocked", true)
+        .put("package", resolvedPkg)
+        .put("reason", "App is in your blocklist; ask the user with handoff instead.")
+    }
     val indexed = ScreenTree.pruneAndIndex(parseUiDumpXml(dump.stdout))
     synchronized(lastRefs) {
       lastRefs.clear()
@@ -101,7 +108,7 @@ object ShizukuScreen {
     for (item in indexed) nodesJson.put(item.toJson())
 
     val out = JSONObject()
-      .put("package", pkg)
+      .put("package", resolvedPkg)
       .put("blocked", false)
       .put("secureScreen", false)
       .put("nodes", nodesJson)
@@ -120,9 +127,23 @@ object ShizukuScreen {
   }
 
   private fun foregroundPackage(shizuku: ShizukuBridge): String {
-    val r = shizuku.exec(listOf("sh", "-c", "dumpsys window windows | grep -E 'mCurrentFocus|mFocusedApp' | head -n 2"), 5)
-    val m = Regex("""([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)+)/""").find(r.stdout)
-    return m?.groupValues?.get(1) ?: ""
+    val pkgRe = Regex("""([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)+)/""")
+    val act = shizuku.exec(listOf("sh", "-c", "dumpsys activity activities | grep -E 'topResumedActivity|mResumedActivity' | head -n 2"), 5)
+    pkgRe.find(act.stdout)?.let { return it.groupValues[1] }
+    val win = shizuku.exec(listOf("sh", "-c", "dumpsys window windows | grep -E 'mCurrentFocus|mFocusedApp' | head -n 2"), 5)
+    return pkgRe.find(win.stdout)?.groupValues?.get(1) ?: ""
+  }
+
+  fun extractPackageFromXml(xml: String): String {
+    val re = Regex("""package="([^"]+)"""")
+    var fallback = ""
+    for (m in re.findAll(xml)) {
+      val p = m.groupValues[1]
+      if (p.isBlank()) continue
+      if (p != "com.android.systemui") return p
+      if (fallback.isEmpty()) fallback = p
+    }
+    return fallback
   }
 
   private fun downscalePng(png: ByteArray, maxPx: Int, quality: Int): String? {

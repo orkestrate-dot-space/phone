@@ -48,6 +48,8 @@ interface PhoneUiActions {
   fun autoApprove(on: Boolean)
   fun unpair()
   fun forgetAll()
+  fun autoUpdate(on: Boolean)
+  fun updateAction()
   fun approve(jobId: String)
   fun reject(jobId: String)
 }
@@ -82,6 +84,7 @@ fun PhoneRoot(m: PhoneUiModel, a: PhoneUiActions) {
         a::allowFiles,
         a::openCameraPermission,
         a::openSettings,
+        a::updateAction,
       )
       Route.Settings -> SettingsScreen(
         m.settings,
@@ -92,6 +95,8 @@ fun PhoneRoot(m: PhoneUiModel, a: PhoneUiActions) {
         a::shizukuAction,
         a::unpair,
         a::forgetAll,
+        a::autoUpdate,
+        a::updateAction,
       )
     }
     m.approval?.let { card -> ApprovalSheet(card, { a.approve(card.jobId) }, { a.reject(card.jobId) }) }

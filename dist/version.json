@@ -1,5 +1,5 @@
 {
-  "versionCode": 44,
-  "versionName": "0.20.0",
-  "notes": "Play-Protect-safe slim companion APK: Shizuku + SAF folder picker + CameraX QR scanner"
+  "versionCode": 45,
+  "versionName": "0.21.0",
+  "notes": "In-app update check with live progress and silent Shizuku auto-update, screen.package fix, and phone install-app CLI."
 }

@@ -12,6 +12,8 @@ class PhoneApp : Application() {
     private set
   lateinit var relay: Relay
     private set
+  lateinit var updater: AppUpdater
+    private set
   @Volatile var uiListener: Relay.Listener? = null
 
   override fun onCreate() {
@@ -19,6 +21,7 @@ class PhoneApp : Application() {
     store = Store(this)
     shizuku = ShizukuBridge(this)
     relay = Relay(this, store, shizuku)
+    updater = AppUpdater(this, store, shizuku)
   }
 
   fun ensureService() {

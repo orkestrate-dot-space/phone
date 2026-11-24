@@ -11,7 +11,7 @@ const SOCK = process.env.PHONE_SOCK ?? DATA_DIR + "/control.sock";
 const PAIR_BASE = process.env.PHONE_PAIR_BASE ?? "https://mobile.orkestrate.space/phone/pair";
 const MAX_PUSH_BYTES = 10 * 1024 * 1024;
 
-import { chmodSync, mkdirSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { networkInterfaces, tmpdir } from "node:os";
 import { basename } from "node:path";
 import { qrPng, qrText } from "./qr";
@@ -53,11 +53,66 @@ async function remoteCall(name: string, params?: unknown): Promise<any> {
 const CLI = new Set([
   "pair", "wait", "device", "battery", "screen", "act", "apps", "files",
   "notifications", "clipboard", "handoff", "status", "doctor", "revoke",
-  "photo", "exec", "update", "devices",
+  "photo", "exec", "update", "devices", "install-app",
 ]);
 const CLI_TOOL: Record<string, string> = { wait: "pair_wait", photo: "capture_photo", devices: "pair_list" };
 
+async function installAppViaAdb(args: string[]) {
+  const flag = (f: string) => args.includes(f);
+  const rest = args.filter(a => !a.startsWith("--"));
+  const localDist = `${DIST_DIR}/app.apk`;
+  let apkPath = rest[0] ?? "";
+  let downloaded = false;
+
+  if (!apkPath) {
+    if (!flag("--download") && existsSync(localDist)) {
+      apkPath = localDist;
+    } else {
+      apkPath = `${tmpdir()}/orkestrate-phone.apk`;
+      const url = "https://mobile.orkestrate.space/orkestrate-phone.apk";
+      console.error(`[phone] downloading ${url}...`);
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`download failed: HTTP ${res.status}`);
+      await Bun.write(apkPath, new Uint8Array(await res.arrayBuffer()));
+      downloaded = true;
+    }
+  }
+
+  try {
+    const hasDevice = () => {
+      const d = Bun.spawnSync(["adb", "devices"]);
+      if (d.exitCode !== 0) throw new Error(`adb devices failed: ${d.stderr.toString().trim()}`);
+      return d.stdout.toString().split("\n").some(l => /\tdevice\s*$/.test(l));
+    };
+
+    if (!hasDevice()) {
+      const mdns = Bun.spawnSync(["adb", "mdns", "services"]);
+      const m = mdns.stdout.toString().match(/_adb-tls-connect\._tcp\s+([^\s:]+:\d+)/);
+      if (m) {
+        console.error(`[phone] connecting to wireless adb ${m[1]}...`);
+        Bun.spawnSync(["adb", "connect", m[1]]);
+      }
+    }
+
+    if (!hasDevice()) {
+      throw new Error("no adb device connected. Plug in USB or pair Wireless Debugging (adb connect <ip>:<port>), then retry.");
+    }
+
+    console.error(`[phone] installing ${apkPath} via adb...`);
+    const inst = Bun.spawnSync(["adb", "install", "-r", apkPath]);
+    const out = (inst.stdout.toString() + inst.stderr.toString()).trim();
+    if (inst.exitCode !== 0) throw new Error(`adb install failed: ${out}`);
+    console.log(out || "Success");
+  } finally {
+    if (downloaded) { try { unlinkSync(apkPath); } catch {} }
+  }
+}
+
 async function runCli(cmd: string, args: string[]) {
+  if (cmd === "install-app") {
+    await installAppViaAdb(args);
+    return;
+  }
   const flag = (f: string) => args.includes(f);
   const rest = args.filter(a => !a.startsWith("--"));
   const params: Record<string, unknown> = {};

@@ -28,6 +28,10 @@ class Store(ctx: Context) {
     get() = p.getBoolean("autoApprove", false)
     set(v) = p.edit().putBoolean("autoApprove", v).apply()
 
+  var autoUpdate: Boolean
+    get() = p.getBoolean("autoUpdate", true)
+    set(v) = p.edit().putBoolean("autoUpdate", v).apply()
+
   /** Post-pairing checklist dismissed. Reset on unpair so a re-pair shows it again. */
   var setupDone: Boolean
     get() = p.getBoolean("setupDone", false)

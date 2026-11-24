@@ -29,4 +29,14 @@ class ShizukuScreenTest {
     assertEquals("@e2", indexed[1].ref)
     assertTrue(indexed[1].node.editable)
   }
+
+  @Test fun extractPackageFromXmlSkipsSystemUi() {
+    val xml = """
+      <hierarchy rotation="0">
+        <node package="com.android.systemui" class="android.widget.FrameLayout" bounds="[0,0][1080,100]" />
+        <node package="space.orkestrate.phone" class="android.widget.FrameLayout" bounds="[0,0][1080,2400]" />
+      </hierarchy>
+    """.trimIndent()
+    assertEquals("space.orkestrate.phone", ShizukuScreen.extractPackageFromXml(xml))
+  }
 }

@@ -20,8 +20,8 @@ android {
     applicationId = "space.orkestrate.phone"
     minSdk = 29
     targetSdk = 36
-    versionCode = 44
-    versionName = "0.20.0"
+    versionCode = 45
+    versionName = "0.21.0"
   }
 
   signingConfigs {

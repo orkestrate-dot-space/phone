@@ -146,6 +146,7 @@ class MainActivity : ComponentActivity(), Relay.Listener {
     relay = app.relay
     shizuku = app.shizuku
     app.uiListener = this
+    app.updater.onChange = { runOnUiThread { syncUi() } }
 
     try {
       Shizuku.addBinderReceivedListenerSticky(shizukuBinderListener)
@@ -176,12 +177,15 @@ class MainActivity : ComponentActivity(), Relay.Listener {
   override fun onResume() {
     super.onResume()
     app.uiListener = this
+    app.updater.onChange = { runOnUiThread { syncUi() } }
     ui.cameraGranted = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
     relay.sendState()
+    app.updater.maybeAutoCheck()
     syncUi()
   }
 
   override fun onDestroy() {
+    app.updater.onChange = null
     try {
       Shizuku.removeBinderReceivedListener(shizukuBinderListener)
       Shizuku.removeRequestPermissionResultListener(shizukuPermListener)
@@ -327,10 +331,19 @@ class MainActivity : ComponentActivity(), Relay.Listener {
           else DateUtils.getRelativeTimeSpanString(t, now, DateUtils.MINUTE_IN_MILLIS).toString(),
         )
       },
+      updateBanner = when (app.updater.state.phase) {
+        UpdatePhase.Available, UpdatePhase.Downloading, UpdatePhase.Installing -> app.updater.state.message
+        else -> null
+      },
+      updateProgress = when (app.updater.state.phase) {
+        UpdatePhase.Downloading, UpdatePhase.Installing -> app.updater.state.progress
+        else -> null
+      },
     )
 
     val pkg = packageManager.getPackageInfo(packageName, 0)
     val vc = if (Build.VERSION.SDK_INT >= 28) pkg.longVersionCode else @Suppress("DEPRECATION") pkg.versionCode.toLong()
+    val u = app.updater.state
     ui.settings = SettingsState(
       name = store.name,
       deviceId = store.deviceId ?: "",
@@ -341,6 +354,18 @@ class MainActivity : ComponentActivity(), Relay.Listener {
       shizukuActionLabel = shizukuAction,
       buildInfo = "v${pkg.versionName} (build $vc)",
       logs = logLines.toList(),
+      autoUpdate = store.autoUpdate,
+      updateStatus = u.message.ifBlank { "v${pkg.versionName} (build $vc)" },
+      updateProgress = if (u.phase == UpdatePhase.Downloading) u.progress else null,
+      updateIndeterminate = u.phase == UpdatePhase.Checking || u.phase == UpdatePhase.Installing,
+      updateBusy = u.phase == UpdatePhase.Checking || u.phase == UpdatePhase.Downloading || u.phase == UpdatePhase.Installing,
+      updateActionLabel = when (u.phase) {
+        UpdatePhase.Available -> if (shizukuOk) "Install v${u.latestVersionName}" else "Download v${u.latestVersionName}"
+        UpdatePhase.Checking -> "Checking..."
+        UpdatePhase.Downloading -> "Downloading..."
+        UpdatePhase.Installing -> "Installing..."
+        else -> "Check for updates"
+      },
     )
   }
 
@@ -430,6 +455,17 @@ class MainActivity : ComponentActivity(), Relay.Listener {
       relay.disconnect(); store.clear()
       stopService(Intent(this@MainActivity, RelayService::class.java))
       navMode = null; recent.clear(); syncUi()
+    }
+    override fun autoUpdate(on: Boolean) {
+      store.autoUpdate = on
+      if (on) app.updater.checkForUpdate(autoInstall = true)
+      syncUi()
+    }
+    override fun updateAction() {
+      app.updater.installOrOpen { url ->
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+      }
+      syncUi()
     }
     override fun approve(jobId: String) { hapticConfirm(); ui.approval = null; cardActions.remove(jobId)?.first?.invoke() }
     override fun reject(jobId: String) { hapticReject(); ui.approval = null; cardActions.remove(jobId)?.second?.invoke() }

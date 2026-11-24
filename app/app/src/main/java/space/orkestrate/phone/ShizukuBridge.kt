@@ -86,6 +86,36 @@ class ShizukuBridge(private val ctx: Context) {
     }
   }
 
+  fun execWithInput(argv: List<String>, input: java.io.InputStream, timeoutSec: Int = 120): Result {
+    if (!hasPermission()) return Result(-1, "", "shizuku-required", false)
+    return try {
+      val proc = newProcess(argv)
+      val out = ByteArrayOutputStream()
+      val err = ByteArrayOutputStream()
+      val tIn = Thread {
+        try {
+          proc.outputStream.use { os ->
+            input.use { src -> src.copyTo(os) }
+            os.flush()
+          }
+        } catch (_: Exception) {}
+      }.apply { isDaemon = true }
+      val t1 = Thread { try { proc.inputStream.copyTo(out) } catch (_: Exception) {} }
+      val t2 = Thread { try { proc.errorStream.copyTo(err) } catch (_: Exception) {} }
+      tIn.start(); t1.start(); t2.start()
+      val done = proc.waitForTimeout(timeoutSec.toLong(), TimeUnit.SECONDS)
+      t1.join(2000); t2.join(2000)
+      if (!done) {
+        proc.destroy()
+        return Result(-1, "", "shizuku timeout", true)
+      }
+      Result(proc.exitValue(), out.toString("UTF-8"), err.toString("UTF-8"), false)
+    } catch (e: Throwable) {
+      Log.d("phone", "shizuku execWithInput fail: $e")
+      Result(-1, "", "shizuku failed: ${e.message}", false)
+    }
+  }
+
   @Suppress("DEPRECATION")
   private fun newProcess(argv: List<String>): ShizukuRemoteProcess {
     val m = Shizuku::class.java.getDeclaredMethod(
