@@ -34,6 +34,7 @@ class Relay(
   @Volatile private var wantUp = false
 
   private val fileStore = SafFileStore(ctx, store, shizuku)
+  private val cdp = CdpTunnel(shizuku)
 
   private val approvals = mutableMapOf<String, Pair<WebSocket, JSONObject>>()
 
@@ -111,6 +112,7 @@ class Relay(
 
   fun disconnect() {
     wantUp = false
+    cdp.closeAll()
     try { ws?.close(1000, "ui") } catch (_: Exception) {}
     ws = null
     listener?.onState("offline")
@@ -145,6 +147,7 @@ class Relay(
           .put("human.handoff")
           .put("photo.capture")
           .put("exec.run")
+          .put("cdp.tunnel")
         val hello = JSONObject()
           .put("t", "hello")
           .put("deviceId", store.deviceId)
@@ -162,8 +165,9 @@ class Relay(
         }
       }
 
-      override fun onClosed(w: WebSocket, code: Int, reason: String) { gone.countDown() }
+      override fun onClosed(w: WebSocket, code: Int, reason: String) { cdp.closeAll(); gone.countDown() }
       override fun onFailure(w: WebSocket, t: Throwable, r: Response?) {
+        cdp.closeAll()
         Log.d("phone", "ws fail: $t")
         listener?.onLog("ws: ${t.message}")
         gone.countDown()
@@ -184,6 +188,9 @@ class Relay(
     when (m.optString("t")) {
       "welcome" -> listener?.onState("connected — ${store.name}")
       "ping" -> w.send("{\"t\":\"pong\"}")
+      "cdp.open" -> cdp.open(m.getString("connId"), m.optString("socket", "chrome_devtools_remote")) { w.send(it.toString()) }
+      "cdp.data" -> cdp.data(m.getString("connId"), m.getString("b64"))
+      "cdp.close" -> cdp.close(m.getString("connId"))
       "job" -> {
         val job = m.getJSONObject("job")
         val id = job.getString("id")

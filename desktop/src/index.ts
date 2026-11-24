@@ -53,7 +53,7 @@ async function remoteCall(name: string, params?: unknown): Promise<any> {
 const CLI = new Set([
   "pair", "wait", "device", "battery", "screen", "act", "apps", "files",
   "notifications", "clipboard", "handoff", "status", "doctor", "revoke",
-  "photo", "exec", "update", "devices", "install-app",
+  "photo", "exec", "update", "devices", "install-app", "cdp",
 ]);
 const CLI_TOOL: Record<string, string> = { wait: "pair_wait", photo: "capture_photo", devices: "pair_list" };
 
@@ -162,6 +162,13 @@ async function runCli(cmd: string, args: string[]) {
   }
   const relayArg = args.find(a => a.startsWith("--relay="));
   if (cmd === "pair" && relayArg) params.relay = relayArg.slice(8);
+  if (cmd === "cdp") {
+    if (flag("--stop")) params.action = "stop";
+    const portArg = args.find(a => a.startsWith("--port="));
+    if (portArg) params.port = Number(portArg.slice(7));
+    const sockArg = args.find(a => a.startsWith("--socket="));
+    if (sockArg) params.socket = sockArg.slice(9);
+  }
   const out = await remoteCall(CLI_TOOL[cmd] ?? cmd, params);
   if (cmd === "pair") {
     console.log(`Scan this with the phone's camera:\n\n${out.qr}\n`);
@@ -364,6 +371,16 @@ Bun.serve({
       }
       if (msg.t === "pong") return;
       if (msg.t === "ping") { ws.send(JSON.stringify({ t: "pong" })); return; }
+      if (msg.t === "cdp.data") {
+        const sock = cdpConns.get(msg.connId);
+        if (sock && typeof msg.b64 === "string") sock.write(Buffer.from(msg.b64, "base64"));
+        return;
+      }
+      if (msg.t === "cdp.close") {
+        const sock = cdpConns.get(msg.connId);
+        if (sock) { cdpConns.delete(msg.connId); try { sock.end(); } catch {} }
+        return;
+      }
       if (msg.t === "result") {
         const p = waiting.get(msg.id);
         if (!p) return;
@@ -377,6 +394,7 @@ Bun.serve({
       const id = ws.data?.deviceId;
       if (id && sockets.get(id) === ws) {
         sockets.delete(id);
+        for (const [cid, sock] of cdpConns) { cdpConns.delete(cid); try { sock.end(); } catch {} }
         for (const [jid, w] of waiting) if (w.deviceId === id) delivered.delete(jid);
         log(`bye ${id}`);
       }
@@ -412,6 +430,53 @@ log(proxyMode ? `relay already running on :${PORT}; forwarding tool calls to it`
   : `relay on :${PORT} data=${DATA_DIR}`);
 
 // ---- MCP over stdio ----
+// ---- CDP TCP-over-WS tunnel ----
+let cdpServer: { stop(closeAll?: boolean): void } | null = null;
+const cdpConns = new Map<string, any>();
+
+function stopCdpTunnel() {
+  for (const [cid, sock] of cdpConns) { cdpConns.delete(cid); try { sock.end(); } catch {} }
+  if (cdpServer) { try { cdpServer.stop(true); } catch {} cdpServer = null; }
+}
+
+function startCdpTunnel(devId: string, port: number, socketName: string) {
+  stopCdpTunnel();
+  cdpServer = Bun.listen({
+    hostname: "127.0.0.1",
+    port,
+    socket: {
+      open(sock: any) {
+        const ws = sockets.get(devId);
+        if (!ws) { sock.end(); return; }
+        const connId = "cdp_" + b64url(rand(6));
+        sock.data = { connId };
+        cdpConns.set(connId, sock);
+        ws.send(JSON.stringify({ t: "cdp.open", connId, socket: socketName }));
+      },
+      data(sock: any, buf: Uint8Array) {
+        const connId = sock.data?.connId;
+        const ws = sockets.get(devId);
+        if (!connId || !ws) { sock.end(); return; }
+        ws.send(JSON.stringify({ t: "cdp.data", connId, b64: Buffer.from(buf).toString("base64") }));
+      },
+      close(sock: any) {
+        const connId = sock.data?.connId;
+        if (!connId) return;
+        cdpConns.delete(connId);
+        const ws = sockets.get(devId);
+        if (ws) ws.send(JSON.stringify({ t: "cdp.close", connId }));
+      },
+      error(sock: any) {
+        const connId = sock.data?.connId;
+        if (!connId) return;
+        cdpConns.delete(connId);
+        const ws = sockets.get(devId);
+        if (ws) ws.send(JSON.stringify({ t: "cdp.close", connId }));
+      },
+    },
+  });
+}
+
 const TOOLS = [
   { name: "status", description: "Paired devices, online state, and granted capabilities",
     inputSchema: { type: "object", properties: {}, additionalProperties: false } },
@@ -747,6 +812,17 @@ async function localCall(rawName: string, params?: any) {
       throw new Error("argv must be a non-empty string array");
     return await sendJob(dev.id, "exec.run",
       { argv, timeoutSec: Math.min(Math.max(params?.timeoutSec ?? 30, 5), 120) }, 300000) as Record<string, unknown>;
+  }
+  if (name === "phone.cdp") {
+    if (params?.action === "stop") {
+      stopCdpTunnel();
+      return { running: false };
+    }
+    const dev = requireDevice();
+    const port = Number(params?.port ?? 9222);
+    const socketName = String(params?.socket ?? "chrome_devtools_remote");
+    startCdpTunnel(dev.id, port, socketName);
+    return { running: true, port, url: `http://127.0.0.1:${port}`, socket: socketName, deviceId: dev.id };
   }
   if (name === "phone.update") {
     const dev = requireDevice();

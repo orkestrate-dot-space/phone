@@ -116,6 +116,14 @@ class ShizukuBridge(private val ctx: Context) {
     }
   }
 
+  fun startProcess(argv: List<String>): ShizukuRemoteProcess? {
+    if (!hasPermission()) return null
+    return try { newProcess(argv) } catch (e: Throwable) {
+      Log.d("phone", "shizuku startProcess fail: $e")
+      null
+    }
+  }
+
   @Suppress("DEPRECATION")
   private fun newProcess(argv: List<String>): ShizukuRemoteProcess {
     val m = Shizuku::class.java.getDeclaredMethod(

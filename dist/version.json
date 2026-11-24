@@ -1,5 +1,5 @@
 {
-  "versionCode": 45,
-  "versionName": "0.21.0",
-  "notes": "In-app update check with live progress and silent Shizuku auto-update, screen.package fix, and phone install-app CLI."
+  "versionCode": 46,
+  "versionName": "0.21.1",
+  "notes": "Shizuku-backed mobile Chrome CDP tunnel (phone cdp) for agent-browser over Wi-Fi/5G."
 }
