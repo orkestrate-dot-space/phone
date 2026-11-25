@@ -42,27 +42,32 @@ class ShizukuBridge(private val ctx: Context) {
     }
   }
 
+  fun prebindDaemon() {
+    if (!hasPermission() || daemon != null) return
+    synchronized(this) {
+      if (daemon == null && !binding) {
+        binding = true
+        daemonLatch = CountDownLatch(1)
+        try {
+          val args = Shizuku.UserServiceArgs(ComponentName(ctx, OrkestrateDaemon::class.java))
+            .daemon(false)
+            .processNameSuffix("daemon")
+            .debuggable(false)
+            .version(48)
+          Shizuku.bindUserService(args, daemonConn)
+        } catch (e: Throwable) {
+          binding = false
+          Log.d("phone", "bindUserService fail: $e")
+        }
+      }
+    }
+  }
+
   fun callDaemon(req: JSONObject): JSONObject? {
     if (!hasPermission()) return null
     if (daemon == null) {
-      synchronized(this) {
-        if (daemon == null && !binding) {
-          binding = true
-          daemonLatch = CountDownLatch(1)
-          try {
-            val args = Shizuku.UserServiceArgs(ComponentName(ctx, OrkestrateDaemon::class.java))
-              .daemon(false)
-              .processNameSuffix("daemon")
-              .debuggable(false)
-              .version(47)
-            Shizuku.bindUserService(args, daemonConn)
-          } catch (e: Throwable) {
-            binding = false
-            Log.d("phone", "bindUserService fail: $e")
-          }
-        }
-      }
-      try { daemonLatch.await(2, TimeUnit.SECONDS) } catch (_: InterruptedException) {}
+      prebindDaemon()
+      try { daemonLatch.await(4, TimeUnit.SECONDS) } catch (_: InterruptedException) {}
     }
     val d = daemon ?: return null
     return try {

@@ -1,6 +1,10 @@
 package space.orkestrate.phone
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -35,6 +39,7 @@ class Relay(
 
   private val fileStore = SafFileStore(ctx, store, shizuku)
   @Volatile private var usingLan = false
+  private var wifiCb: ConnectivityManager.NetworkCallback? = null
 
   private val approvals = mutableMapOf<String, Pair<WebSocket, JSONObject>>()
 
@@ -90,6 +95,7 @@ class Relay(
   fun connect() {
     if (wantUp) return
     wantUp = true
+    registerWifiCallback()
     Thread {
       var wait = 1000L
       while (wantUp) {
@@ -112,9 +118,34 @@ class Relay(
 
   fun disconnect() {
     wantUp = false
+    unregisterWifiCallback()
     try { ws?.close(1000, "ui") } catch (_: Exception) {}
     ws = null
     listener?.onState("offline")
+  }
+
+  private fun registerWifiCallback() {
+    if (wifiCb != null) return
+    try {
+      val cm = ctx.getSystemService(ConnectivityManager::class.java) ?: return
+      val req = NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build()
+      val cb = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+          val lan = store.relayLan
+          if (!usingLan && !lan.isNullOrBlank()) {
+            Thread { if (probeLan(lan)) ws?.close(1000, "wifi-lan") }.apply { isDaemon = true }.start()
+          }
+        }
+      }
+      cm.registerNetworkCallback(req, cb)
+      wifiCb = cb
+    } catch (_: Exception) {}
+  }
+
+  private fun unregisterWifiCallback() {
+    val cb = wifiCb ?: return
+    wifiCb = null
+    try { ctx.getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(cb) } catch (_: Exception) {}
   }
 
   private fun probeLan(url: String): Boolean {
@@ -172,6 +203,7 @@ class Relay(
           .put("permissions", AppTools.permissionsMap(ctx, store, shizuku))
           .put("caps", caps)
         w.send(hello.toString())
+        shizuku.prebindDaemon()
       }
 
       override fun onMessage(w: WebSocket, text: String) {
@@ -204,6 +236,9 @@ class Relay(
         val lan = m.optString("lanUrl", "")
         if (lan.isNotBlank()) store.relayLan = lan
         listener?.onState(if (usingLan) "connected (LAN) — ${store.name}" else "connected (tunnel) — ${store.name}")
+        if (lan.isNotBlank() && !usingLan) {
+          Thread { if (probeLan(lan)) ws?.close(1000, "switch-lan") }.apply { isDaemon = true }.start()
+        }
       }
       "ping" -> w.send("{\"t\":\"pong\"}")
       "job" -> {

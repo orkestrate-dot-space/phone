@@ -440,6 +440,8 @@ const TOOLS = [
         maxPx: { type: "number" },
         quality: { type: "number" },
         query: { type: "string" },
+        find: { type: "string", description: "Filter UI tree lines case-insensitively" },
+        diff: { type: "boolean", description: "Return only UI tree lines added/changed since the last observe" },
       },
       additionalProperties: false,
     },
@@ -783,7 +785,23 @@ async function localCall(rawName: string, params?: any) {
         out.blocked = s.blocked ?? false;
         out.secureScreen = s.secureScreen ?? false;
         if (s.reason) out.reason = s.reason;
-        if (Array.isArray(s.nodes)) out.tree = formatCompactTree(s.nodes as any[]);
+        if (Array.isArray(s.nodes)) {
+          let tree = formatCompactTree(s.nodes as any[]);
+          const devId = requireDevice().id;
+          const prev = lastTreeByDevice.get(devId);
+          lastTreeByDevice.set(devId, tree);
+          if (params?.diff && prev !== undefined) {
+            const prevSet = new Set(prev.split("\n"));
+            const changed = tree.split("\n").filter((l) => !prevSet.has(l));
+            if (changed.length === 0) { out.unchanged = true; tree = ""; }
+            else tree = changed.join("\n");
+          }
+          if (typeof params?.find === "string" && params.find.trim()) {
+            const q = params.find.trim().toLowerCase();
+            tree = tree.split("\n").filter((l) => l.toLowerCase().includes(q)).join("\n");
+          }
+          out.tree = tree;
+        }
         if (s.screenshotPath) out.screenshotPath = s.screenshotPath;
       }));
     }
@@ -833,6 +851,8 @@ async function localCall(rawName: string, params?: any) {
   }
   throw new Error("unknown tool " + name);
 }
+
+const lastTreeByDevice = new Map<string, string>();
 
 function formatCompactTree(nodes: any[]): string {
   return nodes.map((n) => {

@@ -64,15 +64,15 @@ phone screen
 
 Report the result to the user (e.g. battery, model, and whether Shizuku and folder access are enabled). You are done.
 
-## Tools
+## Tools (5 MCP tools)
 
-- `status`, `device`, `battery`: paired devices, online state, battery, screen lock, network, granted permissions.
-- `screen`, `act`, `apps`: observe the foreground app + ref-indexed UI tree (`@e1`...) + optional screenshot, tap/type/scroll/swipe/key, list or open apps/URLs.
-- `files`: `list`, `read`, `write`, `search`, `move`, `pull`, `push`, `delete` (on-glass approval) under `/sdcard`.
-- `notifications`, `clipboard`: list/dismiss/reply to notifications; get/set clipboard.
+- `observe`: get compact UI tree (`@e1`..), `device` telemetry, `notifications`, `apps`, or `screenshot` in one call. Supports `find` (filter tree) and `diff` (changes since last observe).
+- `act`: tap, long_press, type (full Unicode), scroll, swipe, key, open app/URL, clipboard, or dismiss notification. Supports batched `steps[]` and returns the settled UI tree automatically.
+- `files`: `list`, `read`, `write`, `search`, `move`, `pull`, `push`, `delete` (on-glass approval) in the granted folder or `/sdcard`.
 - `handoff`: pause and ask the user to complete a step on glass (login, 2FA, payment, confirmation).
-- `capture_photo`: on-glass approved camera shot.
-- `exec`: optional shell tier (via Shizuku `uid 2000`) and app-tier recon commands.
+- `shell`: optional shell tier (via Shizuku `uid 2000`) and app-tier recon commands.
+
+Setup & admin commands stay in the CLI: `phone pair`, `phone wait`, `phone doctor`, `phone status`, `phone install-app`.
 
 ## When something fails
 

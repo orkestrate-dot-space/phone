@@ -1,5 +1,5 @@
 {
-  "versionCode": 47,
-  "versionName": "0.21.2",
-  "notes": "5-tool MCP, persistent Shizuku Binder daemon (UiAutomation + IInputManager + IClipboard), and LAN-first + tunnel failover transport."
+  "versionCode": 48,
+  "versionName": "0.21.3",
+  "notes": "Auto Tunnel-to-LAN upgrade on Wi-Fi, pre-bound Shizuku Binder daemon, observe({ find, diff }), and 5-tool MCP docs."
 }
