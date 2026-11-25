@@ -69,14 +69,12 @@ describe("phone desktop relay + MCP", () => {
     expect(j.relay).toBe("phone");
   });
 
-  test("MCP initialize + tools/list exposes all 19 tools", async () => {
+  test("MCP initialize + tools/list exposes the 5 consolidated tools", async () => {
     const init = await rpc("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "test", version: "1" } });
     expect(init.result.serverInfo.name).toBe("phone");
     const list = await rpc("tools/list");
     const names = list.result.tools.map((t: any) => t.name);
-    for (const expected of ["status", "device", "battery", "screen", "act", "apps", "files", "notifications", "clipboard", "handoff", "capture_photo", "exec", "update", "pair", "pair_wait", "pair_list", "revoke", "jobs", "doctor"]) {
-      expect(names).toContain(expected);
-    }
+    expect(names).toEqual(["observe", "act", "files", "handoff", "shell"]);
   });
 
   test("5-strike wrong pairing codes void all pending", async () => {

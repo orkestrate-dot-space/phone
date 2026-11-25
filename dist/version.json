@@ -1,5 +1,5 @@
 {
-  "versionCode": 46,
-  "versionName": "0.21.1",
-  "notes": "Shizuku-backed mobile Chrome CDP tunnel (phone cdp) for agent-browser over Wi-Fi/5G."
+  "versionCode": 47,
+  "versionName": "0.21.2",
+  "notes": "5-tool MCP, persistent Shizuku Binder daemon (UiAutomation + IInputManager + IClipboard), and LAN-first + tunnel failover transport."
 }

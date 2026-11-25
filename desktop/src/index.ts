@@ -53,7 +53,7 @@ async function remoteCall(name: string, params?: unknown): Promise<any> {
 const CLI = new Set([
   "pair", "wait", "device", "battery", "screen", "act", "apps", "files",
   "notifications", "clipboard", "handoff", "status", "doctor", "revoke",
-  "photo", "exec", "update", "devices", "install-app", "cdp",
+  "photo", "exec", "update", "devices", "install-app", "observe", "shell",
 ]);
 const CLI_TOOL: Record<string, string> = { wait: "pair_wait", photo: "capture_photo", devices: "pair_list" };
 
@@ -162,12 +162,10 @@ async function runCli(cmd: string, args: string[]) {
   }
   const relayArg = args.find(a => a.startsWith("--relay="));
   if (cmd === "pair" && relayArg) params.relay = relayArg.slice(8);
-  if (cmd === "cdp") {
-    if (flag("--stop")) params.action = "stop";
-    const portArg = args.find(a => a.startsWith("--port="));
-    if (portArg) params.port = Number(portArg.slice(7));
-    const sockArg = args.find(a => a.startsWith("--socket="));
-    if (sockArg) params.socket = sockArg.slice(9);
+  if (cmd === "shell") params.argv = args.slice(args[0] === "--" ? 1 : 0);
+  if (cmd === "observe") {
+    params.include = rest.length ? rest : ["screen"];
+    if (flag("--screenshot")) params.include = [...new Set([...(params.include as string[]), "screenshot"])];
   }
   const out = await remoteCall(CLI_TOOL[cmd] ?? cmd, params);
   if (cmd === "pair") {
@@ -356,7 +354,7 @@ Bun.serve({
         sockets.set(dev.id, ws);
         ws.data.authed = true; ws.data.deviceId = dev.id;
         log(`hello ${dev.id} caps=${(msg.caps ?? []).join(",")}`);
-        ws.send(JSON.stringify({ t: "welcome", deviceId: dev.id }));
+        ws.send(JSON.stringify({ t: "welcome", deviceId: dev.id, lanUrl: lanRelayUrl() }));
         flushQueue(dev.id);
         return;
       }
@@ -371,16 +369,6 @@ Bun.serve({
       }
       if (msg.t === "pong") return;
       if (msg.t === "ping") { ws.send(JSON.stringify({ t: "pong" })); return; }
-      if (msg.t === "cdp.data") {
-        const sock = cdpConns.get(msg.connId);
-        if (sock && typeof msg.b64 === "string") sock.write(Buffer.from(msg.b64, "base64"));
-        return;
-      }
-      if (msg.t === "cdp.close") {
-        const sock = cdpConns.get(msg.connId);
-        if (sock) { cdpConns.delete(msg.connId); try { sock.end(); } catch {} }
-        return;
-      }
       if (msg.t === "result") {
         const p = waiting.get(msg.id);
         if (!p) return;
@@ -394,7 +382,6 @@ Bun.serve({
       const id = ws.data?.deviceId;
       if (id && sockets.get(id) === ws) {
         sockets.delete(id);
-        for (const [cid, sock] of cdpConns) { cdpConns.delete(cid); try { sock.end(); } catch {} }
         for (const [jid, w] of waiting) if (w.deviceId === id) delivered.delete(jid);
         log(`bye ${id}`);
       }
@@ -430,137 +417,106 @@ log(proxyMode ? `relay already running on :${PORT}; forwarding tool calls to it`
   : `relay on :${PORT} data=${DATA_DIR}`);
 
 // ---- MCP over stdio ----
-// ---- CDP TCP-over-WS tunnel ----
-let cdpServer: { stop(closeAll?: boolean): void } | null = null;
-const cdpConns = new Map<string, any>();
-
-function stopCdpTunnel() {
-  for (const [cid, sock] of cdpConns) { cdpConns.delete(cid); try { sock.end(); } catch {} }
-  if (cdpServer) { try { cdpServer.stop(true); } catch {} cdpServer = null; }
-}
-
-function startCdpTunnel(devId: string, port: number, socketName: string) {
-  stopCdpTunnel();
-  cdpServer = Bun.listen({
-    hostname: "127.0.0.1",
-    port,
-    socket: {
-      open(sock: any) {
-        const ws = sockets.get(devId);
-        if (!ws) { sock.end(); return; }
-        const connId = "cdp_" + b64url(rand(6));
-        sock.data = { connId };
-        cdpConns.set(connId, sock);
-        ws.send(JSON.stringify({ t: "cdp.open", connId, socket: socketName }));
-      },
-      data(sock: any, buf: Uint8Array) {
-        const connId = sock.data?.connId;
-        const ws = sockets.get(devId);
-        if (!connId || !ws) { sock.end(); return; }
-        ws.send(JSON.stringify({ t: "cdp.data", connId, b64: Buffer.from(buf).toString("base64") }));
-      },
-      close(sock: any) {
-        const connId = sock.data?.connId;
-        if (!connId) return;
-        cdpConns.delete(connId);
-        const ws = sockets.get(devId);
-        if (ws) ws.send(JSON.stringify({ t: "cdp.close", connId }));
-      },
-      error(sock: any) {
-        const connId = sock.data?.connId;
-        if (!connId) return;
-        cdpConns.delete(connId);
-        const ws = sockets.get(devId);
-        if (ws) ws.send(JSON.stringify({ t: "cdp.close", connId }));
-      },
-    },
-  });
+function lanRelayUrl(): string | null {
+  for (const ifs of Object.values(networkInterfaces())) {
+    for (const i of ifs ?? []) {
+      if (i.family === "IPv4" && !i.internal) return `http://${i.address}:${PORT}`;
+    }
+  }
+  return null;
 }
 
 const TOOLS = [
-  { name: "status", description: "Paired devices, online state, and granted capabilities",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "device", description: "Read device info, battery, screen lock state, network, and granted permissions",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "battery", description: "Read the phone battery via the companion app",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "screen", description: "Observe the current phone screen: foreground package, ref-indexed UI tree (@e1..), and optional screenshot saved to a temp file",
-    inputSchema: { type: "object", properties: {
-      screenshot: { type: "boolean" },
-      maxPx: { type: "number" },
-      quality: { type: "number" },
-      inlineBase64: { type: "boolean" },
-    }, additionalProperties: false } },
-  { name: "act", description: "Perform a UI action on the phone screen via AccessibilityService (tap, long_press, type, scroll, swipe, key)",
-    inputSchema: { type: "object", properties: {
-      action: { type: "string", enum: ["tap", "long_press", "type", "scroll", "swipe", "key"] },
-      ref: { type: "string" },
-      x: { type: "number" },
-      y: { type: "number" },
-      x2: { type: "number" },
-      y2: { type: "number" },
-      text: { type: "string" },
-      clear: { type: "boolean" },
-      submit: { type: "boolean" },
-      direction: { type: "string", enum: ["up", "down", "left", "right"] },
-      key: { type: "string", enum: ["back", "home", "recents", "enter"] },
-    }, required: ["action"], additionalProperties: false } },
-  { name: "apps", description: "List installed launchable apps or open an app package / URL on the phone",
-    inputSchema: { type: "object", properties: {
-      action: { type: "string", enum: ["list", "open"] },
-      package: { type: "string" },
-      url: { type: "string" },
-      query: { type: "string" },
-    }, required: ["action"], additionalProperties: false } },
-  { name: "files", description: "Read, write, list, search, move, pull, push, or delete (on-glass approval) files under /sdcard",
-    inputSchema: { type: "object", properties: {
-      action: { type: "string", enum: ["list", "read", "write", "search", "move", "delete", "pull", "push"] },
-      path: { type: "string" },
-      dest: { type: "string" },
-      localPath: { type: "string" },
-      content: { type: "string" },
-      encoding: { type: "string", enum: ["utf8", "base64"] },
-      query: { type: "string" },
-      maxBytes: { type: "number" },
-    }, required: ["action"], additionalProperties: false } },
-  { name: "notifications", description: "List active notifications, dismiss one, or send an inline reply",
-    inputSchema: { type: "object", properties: {
-      action: { type: "string", enum: ["list", "dismiss", "reply"] },
-      key: { type: "string" },
-      text: { type: "string" },
-    }, required: ["action"], additionalProperties: false } },
-  { name: "clipboard", description: "Get or set the phone clipboard text",
-    inputSchema: { type: "object", properties: {
-      action: { type: "string", enum: ["get", "set"] },
-      text: { type: "string" },
-    }, required: ["action"], additionalProperties: false } },
-  { name: "handoff", description: "Pause and ask the user to complete a step on their phone (login, 2FA, payment, confirmation), resolving only on a real tap",
-    inputSchema: { type: "object", properties: {
-      message: { type: "string" },
-      timeoutSec: { type: "number" },
-    }, required: ["message"], additionalProperties: false } },
-  { name: "capture_photo", description: "Ask the human to take a photo (on-glass approval, up to 300s), saved to a temp file",
-    inputSchema: { type: "object", properties: {
-      maxPx: { type: "number" },
-      quality: { type: "number" },
-      inlineBase64: { type: "boolean" },
-    }, additionalProperties: false } },
-  { name: "exec", description: "Run a system command on the phone (on-glass approval unless exact-match auto-approved)",
-    inputSchema: { type: "object", properties: { argv: { type: "array", items: { type: "string" } }, timeoutSec: { type: "number" } }, required: ["argv"], additionalProperties: false } },
-  { name: "update", description: "Ship the relay-published build to the phone: downloads + silent shell install, zero taps if opted in",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "pair", description: "Start pairing a phone: mints a one-time code (10 min) and returns a QR + link for the user to scan with the phone. Show the QR to the user, then call pair_wait. Optional relay overrides the public URL.",
-    inputSchema: { type: "object", properties: { relay: { type: "string" } }, additionalProperties: false } },
-  { name: "pair_wait", description: "Block until the phone redeems the pairing code (up to 10 min). Call after showing the QR from pair.",
-    inputSchema: { type: "object", properties: { code: { type: "string" } }, additionalProperties: false } },
-  { name: "pair_list", description: "Paired devices (keys never shown)",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "revoke", description: "Revoke a device: drops its key and socket",
-    inputSchema: { type: "object", properties: { deviceId: { type: "string" } }, required: ["deviceId"], additionalProperties: false } },
-  { name: "jobs", description: "Jobs currently queued or awaiting results",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "doctor", description: "Relay health: listener, tunnel, devices, queues",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+  {
+    name: "observe",
+    description: "Observe the phone: compact UI tree (@e1..), device/battery/permissions, active notifications, installed apps, or screenshot. Defaults to [\"screen\"].",
+    inputSchema: {
+      type: "object",
+      properties: {
+        include: {
+          type: "array",
+          items: { type: "string", enum: ["screen", "device", "notifications", "apps", "screenshot"] },
+        },
+        maxPx: { type: "number" },
+        quality: { type: "number" },
+        query: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "act",
+    description: "Perform one or more UI/app/clipboard actions (tap, long_press, type, scroll, swipe, key, open, clipboard_get, clipboard_set, dismiss_notification). Supports batched steps[] and returns the settled UI tree by default (observe: true).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["tap", "long_press", "type", "scroll", "swipe", "key", "open", "clipboard_get", "clipboard_set", "dismiss_notification"],
+        },
+        ref: { type: "string" },
+        text: { type: "string" },
+        x: { type: "number" },
+        y: { type: "number" },
+        x2: { type: "number" },
+        y2: { type: "number" },
+        clear: { type: "boolean" },
+        submit: { type: "boolean" },
+        direction: { type: "string", enum: ["up", "down", "left", "right"] },
+        key: { type: "string", enum: ["back", "home", "recents", "enter"] },
+        package: { type: "string" },
+        url: { type: "string" },
+        steps: { type: "array", items: { type: "object" } },
+        observe: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "files",
+    description: "Read, write, list, search, move, pull, push, or delete (on-glass approval) files in the granted folder or /sdcard.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["list", "read", "write", "search", "move", "delete", "pull", "push"] },
+        path: { type: "string" },
+        dest: { type: "string" },
+        localPath: { type: "string" },
+        content: { type: "string" },
+        encoding: { type: "string", enum: ["utf8", "base64"] },
+        query: { type: "string" },
+        maxBytes: { type: "number" },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "handoff",
+    description: "Pause and ask the user to complete a step on their phone (login, 2FA, payment, confirmation), resolving only on a real tap.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        message: { type: "string" },
+        timeoutSec: { type: "number" },
+      },
+      required: ["message"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "shell",
+    description: "Run an allowlisted system command on the phone (on-glass approval unless exact-match auto-approved).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        argv: { type: "array", items: { type: "string" } },
+        timeoutSec: { type: "number" },
+      },
+      required: ["argv"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 const callTool = (name: string, params?: any) => (proxyMode ? remoteCall(name, params) : localCall(name, params));
@@ -735,7 +691,7 @@ async function localCall(rawName: string, params?: any) {
     }
     return res;
   }
-  if (name === "phone.act") {
+  if (name === "phone.act_legacy") {
     const dev = requireDevice();
     if (!params?.action) throw new Error("action is required");
     return await sendJob(dev.id, "screen.act", params) as Record<string, unknown>;
@@ -813,16 +769,58 @@ async function localCall(rawName: string, params?: any) {
     return await sendJob(dev.id, "exec.run",
       { argv, timeoutSec: Math.min(Math.max(params?.timeoutSec ?? 30, 5), 120) }, 300000) as Record<string, unknown>;
   }
-  if (name === "phone.cdp") {
-    if (params?.action === "stop") {
-      stopCdpTunnel();
-      return { running: false };
+  if (name === "phone.shell") {
+    return await localCall("phone.exec", params);
+  }
+  if (name === "phone.observe") {
+    const inc = new Set<string>(Array.isArray(params?.include) && params.include.length ? params.include : ["screen"]);
+    const wantShot = inc.has("screenshot");
+    const tasks: Promise<void>[] = [];
+    const out: Record<string, unknown> = {};
+    if (inc.has("screen") || wantShot) {
+      tasks.push(localCall("phone.screen", { screenshot: wantShot, maxPx: params?.maxPx, quality: params?.quality }).then((s) => {
+        out.package = s.package ?? "";
+        out.blocked = s.blocked ?? false;
+        out.secureScreen = s.secureScreen ?? false;
+        if (s.reason) out.reason = s.reason;
+        if (Array.isArray(s.nodes)) out.tree = formatCompactTree(s.nodes as any[]);
+        if (s.screenshotPath) out.screenshotPath = s.screenshotPath;
+      }));
     }
-    const dev = requireDevice();
-    const port = Number(params?.port ?? 9222);
-    const socketName = String(params?.socket ?? "chrome_devtools_remote");
-    startCdpTunnel(dev.id, port, socketName);
-    return { running: true, port, url: `http://127.0.0.1:${port}`, socket: socketName, deviceId: dev.id };
+    if (inc.has("device")) tasks.push(localCall("phone.device", {}).then((d) => { out.device = d; }));
+    if (inc.has("notifications")) tasks.push(localCall("phone.notifications", { action: "list" }).then((n) => { out.notifications = n.notifications ?? n; }));
+    if (inc.has("apps")) tasks.push(localCall("phone.apps", { action: "list", query: params?.query }).then((a) => { out.apps = a.apps ?? a; }));
+    await Promise.all(tasks);
+    return out;
+  }
+  if (name === "phone.act") {
+    const steps: any[] = Array.isArray(params?.steps) && params.steps.length ? params.steps : [params];
+    const results: unknown[] = [];
+    let uiTouched = false;
+    for (const step of steps) {
+      const a = step?.action;
+      if (!a) throw new Error("action is required");
+      if (a === "open") {
+        results.push(await localCall("phone.apps", { action: "open", package: step.package, url: step.url }));
+        uiTouched = true;
+      } else if (a === "clipboard_get") {
+        results.push(await localCall("phone.clipboard", { action: "get" }));
+      } else if (a === "clipboard_set") {
+        results.push(await localCall("phone.clipboard", { action: "set", text: step.text }));
+      } else if (a === "dismiss_notification") {
+        results.push(await localCall("phone.notifications", { action: "dismiss", key: step.key }));
+      } else {
+        const dev = requireDevice();
+        results.push(await sendJob(dev.id, "screen.act", step));
+        uiTouched = true;
+      }
+    }
+    const res: Record<string, unknown> = { ok: true, results };
+    if (uiTouched && params?.observe !== false) {
+      await Bun.sleep(250);
+      res.screen = await localCall("phone.observe", { include: ["screen"] });
+    }
+    return res;
   }
   if (name === "phone.update") {
     const dev = requireDevice();
@@ -834,6 +832,15 @@ async function localCall(rawName: string, params?: any) {
         notes: meta.notes ?? "" }, 180000) as Record<string, unknown>;
   }
   throw new Error("unknown tool " + name);
+}
+
+function formatCompactTree(nodes: any[]): string {
+  return nodes.map((n) => {
+    const label = [n.text, n.desc].filter(Boolean).map((s: string) => JSON.stringify(s)).join(" ");
+    const flags = [n.clickable && "click", n.editable && "edit", n.scrollable && "scroll", n.checked && "checked", n.focused && "focused"].filter(Boolean).join(",");
+    const b = Array.isArray(n.bounds) ? `[${n.bounds.join(",")}]` : "";
+    return `${n.ref} ${n.role || "View"}${label ? " " + label : ""} ${b}${flags ? " " + flags : ""}`.trim();
+  }).join("\n");
 }
 
 function reply(id: unknown, result: unknown) {

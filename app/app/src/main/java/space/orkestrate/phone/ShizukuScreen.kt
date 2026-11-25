@@ -76,6 +76,21 @@ object ShizukuScreen {
     if (!shizuku.hasPermission()) {
       throw IllegalStateException("shizuku-required: install and start Shizuku from Google Play, then grant access in Orkestrate Phone")
     }
+    shizuku.callDaemon(
+      JSONObject().put("op", "screen").put("screenshot", screenshot).put("maxPx", maxPx).put("quality", quality),
+    )?.let { res ->
+      if (res.optBoolean("ok", false)) {
+        val pkgName = res.optString("package", "")
+        if (pkgName in store.blockedPackages) {
+          return JSONObject()
+            .put("blocked", true)
+            .put("package", pkgName)
+            .put("reason", "App is in your blocklist; ask the user with handoff instead.")
+        }
+        res.remove("ok")
+        return res
+      }
+    }
     val pkg = foregroundPackage(shizuku)
     if (pkg in store.blockedPackages) {
       return JSONObject()
@@ -165,6 +180,12 @@ object ShizukuScreen {
   fun act(shizuku: ShizukuBridge, params: JSONObject): JSONObject {
     if (!shizuku.hasPermission()) {
       throw IllegalStateException("shizuku-required: install and start Shizuku from Google Play, then grant access in Orkestrate Phone")
+    }
+    shizuku.callDaemon(JSONObject(params.toString()).put("op", "act"))?.let { res ->
+      if (res.optBoolean("ok", false)) {
+        res.remove("ok")
+        return res
+      }
     }
     val action = params.optString("action", "")
     val cmd: List<String> = when (action) {

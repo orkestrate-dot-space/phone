@@ -34,7 +34,7 @@ class Relay(
   @Volatile private var wantUp = false
 
   private val fileStore = SafFileStore(ctx, store, shizuku)
-  private val cdp = CdpTunnel(shizuku)
+  @Volatile private var usingLan = false
 
   private val approvals = mutableMapOf<String, Pair<WebSocket, JSONObject>>()
 
@@ -112,14 +112,30 @@ class Relay(
 
   fun disconnect() {
     wantUp = false
-    cdp.closeAll()
     try { ws?.close(1000, "ui") } catch (_: Exception) {}
     ws = null
     listener?.onState("offline")
   }
 
+  private fun probeLan(url: String): Boolean {
+    return try {
+      val c = http.newBuilder().connectTimeout(600, TimeUnit.MILLISECONDS).readTimeout(600, TimeUnit.MILLISECONDS).build()
+      c.newCall(Request.Builder().url(url.trimEnd('/') + "/version").build()).execute().use { it.isSuccessful }
+    } catch (_: Exception) {
+      false
+    }
+  }
+
   private fun dial() {
-    val base = store.relayHttp ?: throw IllegalStateException("no relay")
+    val tunnelBase = store.relayHttp ?: throw IllegalStateException("no relay")
+    val lanBase = store.relayLan
+    val base = if (!lanBase.isNullOrBlank() && probeLan(lanBase)) {
+      usingLan = true
+      lanBase
+    } else {
+      usingLan = false
+      tunnelBase
+    }
     val token = store.token ?: throw IllegalStateException("not paired")
     val wsUrl = base.replaceFirst("http", "ws").trimEnd('/') + "/device"
     val req = Request.Builder()
@@ -147,7 +163,6 @@ class Relay(
           .put("human.handoff")
           .put("photo.capture")
           .put("exec.run")
-          .put("cdp.tunnel")
         val hello = JSONObject()
           .put("t", "hello")
           .put("deviceId", store.deviceId)
@@ -165,9 +180,8 @@ class Relay(
         }
       }
 
-      override fun onClosed(w: WebSocket, code: Int, reason: String) { cdp.closeAll(); gone.countDown() }
+      override fun onClosed(w: WebSocket, code: Int, reason: String) { gone.countDown() }
       override fun onFailure(w: WebSocket, t: Throwable, r: Response?) {
-        cdp.closeAll()
         Log.d("phone", "ws fail: $t")
         listener?.onLog("ws: ${t.message}")
         gone.countDown()
@@ -186,11 +200,12 @@ class Relay(
 
   private fun onFrame(w: WebSocket, m: JSONObject) {
     when (m.optString("t")) {
-      "welcome" -> listener?.onState("connected — ${store.name}")
+      "welcome" -> {
+        val lan = m.optString("lanUrl", "")
+        if (lan.isNotBlank()) store.relayLan = lan
+        listener?.onState(if (usingLan) "connected (LAN) — ${store.name}" else "connected (tunnel) — ${store.name}")
+      }
       "ping" -> w.send("{\"t\":\"pong\"}")
-      "cdp.open" -> cdp.open(m.getString("connId"), m.optString("socket", "chrome_devtools_remote")) { w.send(it.toString()) }
-      "cdp.data" -> cdp.data(m.getString("connId"), m.getString("b64"))
-      "cdp.close" -> cdp.close(m.getString("connId"))
       "job" -> {
         val job = m.getJSONObject("job")
         val id = job.getString("id")

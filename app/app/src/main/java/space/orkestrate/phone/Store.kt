@@ -9,6 +9,7 @@ class Store(ctx: Context) {
     ctx.getSharedPreferences("phone", Context.MODE_PRIVATE)
 
   var relayHttp: String? get() = p.getString("relayHttp", null); set(v) = put("relayHttp", v)
+  var relayLan: String? get() = p.getString("relayLan", null); set(v) = put("relayLan", v)
   var deviceId: String? get() = p.getString("deviceId", null); set(v) = put("deviceId", v)
   var token: String? get() = p.getString("token", null); set(v) = put("token", v)
   var name: String get() = p.getString("name", android.os.Build.MODEL) ?: android.os.Build.MODEL
@@ -40,11 +41,11 @@ class Store(ctx: Context) {
   val paired: Boolean get() = deviceId != null && token != null && relayHttp != null
 
   fun clearRelay() = p.edit()
-    .remove("setupDone").remove("relayHttp").remove("deviceId").remove("token").remove("paused")
+    .remove("setupDone").remove("relayHttp").remove("relayLan").remove("deviceId").remove("token").remove("paused")
     .apply()
 
   fun clear() = p.edit()
-    .remove("setupDone").remove("relayHttp").remove("deviceId").remove("token").remove("paused")
+    .remove("setupDone").remove("relayHttp").remove("relayLan").remove("deviceId").remove("token").remove("paused")
     .remove("safTreeUri")
     .apply()
 

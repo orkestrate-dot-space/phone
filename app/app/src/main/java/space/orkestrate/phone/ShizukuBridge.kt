@@ -1,11 +1,16 @@
 package space.orkestrate.phone
 
+import android.content.ComponentName
 import android.content.Context
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.os.IBinder
 import android.util.Log
+import org.json.JSONObject
 import rikka.shizuku.Shizuku
 import rikka.shizuku.ShizukuRemoteProcess
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
@@ -17,6 +22,58 @@ class ShizukuBridge(private val ctx: Context) {
 
   companion object {
     const val PKG = "moe.shizuku.privileged.api"
+  }
+
+  @Volatile private var daemon: IOrkestrateDaemon? = null
+  @Volatile private var daemonLatch = CountDownLatch(1)
+  @Volatile private var binding = false
+
+  private val daemonConn = object : ServiceConnection {
+    override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+      daemon = IOrkestrateDaemon.Stub.asInterface(service)
+      binding = false
+      daemonLatch.countDown()
+    }
+
+    override fun onServiceDisconnected(name: ComponentName?) {
+      daemon = null
+      binding = false
+      daemonLatch = CountDownLatch(1)
+    }
+  }
+
+  fun callDaemon(req: JSONObject): JSONObject? {
+    if (!hasPermission()) return null
+    if (daemon == null) {
+      synchronized(this) {
+        if (daemon == null && !binding) {
+          binding = true
+          daemonLatch = CountDownLatch(1)
+          try {
+            val args = Shizuku.UserServiceArgs(ComponentName(ctx, OrkestrateDaemon::class.java))
+              .daemon(false)
+              .processNameSuffix("daemon")
+              .debuggable(false)
+              .version(47)
+            Shizuku.bindUserService(args, daemonConn)
+          } catch (e: Throwable) {
+            binding = false
+            Log.d("phone", "bindUserService fail: $e")
+          }
+        }
+      }
+      try { daemonLatch.await(2, TimeUnit.SECONDS) } catch (_: InterruptedException) {}
+    }
+    val d = daemon ?: return null
+    return try {
+      val raw = d.call(req.toString())
+      val res = JSONObject(raw)
+      if (res.optBoolean("fallback", false)) null else res
+    } catch (e: Throwable) {
+      Log.d("phone", "daemon call fail: $e")
+      daemon = null
+      null
+    }
   }
 
   fun isInstalled(): Boolean = try {

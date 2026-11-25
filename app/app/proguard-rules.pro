@@ -1,7 +1,8 @@
 -keep class space.orkestrate.phone.** { *; }
 -keep class rikka.shizuku.** { *; }
 -dontwarn rikka.shizuku.**
--keep class space.orkestrate.phone.CdpBridge { *; }
+-keep class space.orkestrate.phone.OrkestrateDaemon { *; }
+-keep class space.orkestrate.phone.IOrkestrateDaemon** { *; }
 -dontwarn okhttp3.**
 -dontwarn okio.**
 -dontwarn javax.annotation.**
