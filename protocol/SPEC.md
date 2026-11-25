@@ -27,7 +27,8 @@ also accepts `phone://pair?code=…&relay=…`. Codes redeem with or without the
   tunnel, so it says nothing about devices). The app uses it to tell the user whether the relay answers.
 - `WS /device`, header `Authorization: Bearer <token>`. Query `?token=` also accepted.
 - Frames are JSON text messages, `{t, ...}`:
-  - app→relay `hello`: `{"t":"hello","deviceId":"...","name":"...","appVersion":43,"paused":false,"permissions":{"accessibility":true,"files":true,"notifications":true,"camera":true},"caps":["device.info","battery.get","screen.observe","screen.act","apps.manage","files.op","notifications.op","clipboard.op","human.handoff","photo.capture","exec.run","app.update"]}`
+  - app→relay `hello`: `{"t":"hello","deviceId":"...","name":"...","appVersion":48,"paused":false,"permissions":{"shizuku":true,"shizukuInstalled":true,"shizukuRunning":true,"files":true,"postNotifications":true,"background":false,"camera":true},"caps":["device.info","battery.get","screen.observe","screen.act","apps.manage","files.op","notifications.op","clipboard.op","human.handoff","exec.run"]}`
+  - relay→app `welcome`: `{"t":"welcome","deviceId":"...","lanUrl":"http://192.168.x.x:19877"}` (LAN-first + OpenTunnel failover).
   - app→relay `state`: `{"t":"state","paused":false,"permissions":{...}}` (sent whenever pause state or permissions change)
   - relay→app `job`: `{"t":"job","job":{"id":"job_...","capability":"screen.observe","params":{},"timeoutMs":60000}}`
   - app→relay `result`: `{"t":"result","id":"job_...","ok":true,"data":{...}}` or `ok:false, error:"..."`
@@ -55,13 +56,13 @@ state: queued → delivered → done | failed | expired
 ### `battery.get` (ungated, legacy)
 `{}` → `{"level":61,"charging":true,"voltageMv":3996,"tempC":34.6}`.
 
-### `screen.observe` (ungated, AccessibilityService)
+### `screen.observe` (ungated, Shizuku `OrkestrateDaemon` `UiAutomation`)
 `{"screenshot":false,"maxPx":1080,"quality":75}` → `{"package":"...","secureScreen":false,"blocked":false,"nodes":[{"ref":"@e1","role":"Button","text":"Send","desc":"","id":"send_btn","bounds":[900,1800,1040,1920],"clickable":true,"editable":false,"scrollable":false,"checked":false,"focused":false}],"screenshot_b64":"..."}`.
 - Ref-indexed UI tree capped at 150 visible nodes.
 - If the foreground app is in the user's blocklist, returns `{"blocked":true,"package":"..."}` without reading nodes or taking a screenshot.
 - If `FLAG_SECURE` is active on Android 11+, `secureScreen: true` and `screenshot_b64` is omitted.
 
-### `screen.act` (ungated, AccessibilityService)
+### `screen.act` (ungated, Shizuku `OrkestrateDaemon` `IInputManager` + `UiAutomation`)
 `{"action":"tap|long_press|type|scroll|swipe|key","ref":"@e1","x":0,"y":0,"x2":0,"y2":0,"text":"...","clear":false,"submit":false,"direction":"down","key":"back|home|recents|enter"}` → `{"ok":true}`.
 
 ### `apps.manage` (ungated)
@@ -70,10 +71,10 @@ state: queued → delivered → done | failed | expired
 
 ### `files.op` (ungated except `delete`, `/sdcard` containment)
 - `{"action":"list|read|write|search|move|pull|push|delete","path":"...","dest":"...","content":"...","encoding":"utf8|base64","query":"...","maxBytes":262144,"bytes_b64":"..."}`
-- All paths are canonicalized and confined to `/sdcard` (`MANAGE_EXTERNAL_STORAGE`).
+- All paths are canonicalized and confined to the user-picked SAF folder (`ACTION_OPEN_DOCUMENT_TREE`), or `/sdcard` when Shizuku is active.
 - `delete` is always approval-gated on glass (300s timeout).
 
-### `notifications.op` (ungated, NotificationListenerService)
+### `notifications.op` (ungated, Shizuku `dumpsys notification`)
 - `{"action":"list|dismiss|reply","key":"...","text":"..."}`
 
 ### `clipboard.op` (ungated)
@@ -177,33 +178,15 @@ Rules, all load-bearing:
 - Same WiFi keeps working with the LAN URL; switch relay address in the
   app's advanced box, no re-pair needed (the device token is URL-independent).
 
-## MCP surface (live)
+## MCP surface (5 consolidated tools)
 
-Tool names are unprefixed and use only `[a-z_]`, which every MCP client accepts (clients add the server
-name themselves). The legacy dotted names (`phone.battery`) are still accepted by the relay.
+Tool names are unprefixed (`[a-z_]`). Setup and admin commands (`pair`, `wait`, `status`, `doctor`, `devices`, `revoke`, `install-app`) live in the `phone` CLI.
 
-- `status` → paired devices + online state + app versions + paused/permissions.
-- `device` → full device info, battery, screen lock state, network, permissions.
-- `battery` → waits for job result (60s; queues while offline, delivers on hello).
-- `screen` → current app + ref-indexed UI tree (`@e1`...) + optional screenshot saved to temp file.
-- `act` → `tap`, `long_press`, `type`, `scroll`, `swipe`, `key` (`back|home|recents|enter`).
-- `apps` → `list` launchable apps or `open` a package/URL.
-- `files` → `list`, `read`, `write`, `search`, `move`, `pull`, `push`, `delete` (approval-gated) on `/sdcard`.
-- `notifications` → `list`, `dismiss`, `reply`.
-- `clipboard` → `get`, `set`.
+- `observe` → `{ include?: ["screen" | "device" | "notifications" | "apps" | "screenshot"], find?, diff? }` — compact `@e1..` UI tree, device telemetry, notifications, apps, or screenshot.
+- `act` → `{ action?, steps?, observe?: true }` — `tap`, `long_press`, `type`, `scroll`, `swipe`, `key`, `open`, `clipboard_get`, `clipboard_set`, `dismiss_notification`, returning the settled UI tree.
+- `files` → `list`, `read`, `write`, `search`, `move`, `pull`, `push`, `delete` (approval-gated).
 - `handoff` → pause and ask the user to complete a step on glass (30–600s, default 300s).
-- `capture_photo` → approval-gated, 300s window, saved to temp file.
-- `exec` → approval-gated (or auto for the allowlist); result carries `tier`.
-- `update` → ships the relay's dist build to the phone (see `app.update`).
-- `pair {relay?}` → mints a code (10 min, single use) and returns `pair_url`, `qr` (text block),
-  `qr_png`, `relay_url`. The ONLY minter. The public relay URL is `relay`, `PHONE_PUBLIC_URL`, an
-  opentunnel route for this port, a Tailscale address, then the LAN address (same Wi-Fi only; a
-  `warning` says so).
-- `pair_wait {code?}` → blocks until the phone redeems (up to the code's expiry).
-- `pair_list` → devices (keys never leave the relay).
-- `revoke {deviceId}` → drops key + socket, fails its queued jobs.
-- `jobs` → queued/awaiting jobs.
-- `doctor` → listener, public URL, devices, queue depths.
+- `shell` → approval-gated (or exact-match auto-approved) `/system/bin` commands.
 
 One relay serves everything. An MCP process started while a relay already runs on the port forwards
 its tool calls to it over the control socket instead of binding the port. The installed `phone` command

@@ -1,6 +1,6 @@
 # Phone MCP: setup for agents
 
-Phone MCP lets you (an AI agent) use the user's real Android phone: see and operate apps (`screen`, `act`, `apps`), read and write shared storage (`files`), inspect and reply to notifications (`notifications`), read/set the clipboard (`clipboard`), request a photo (`capture_photo`), and hand off sensitive steps to the user (`handoff`). Photos, file deletes, handoffs, and shell commands wait for a real on-glass tap. You cannot approve for them.
+Phone MCP lets you (an AI agent) use the user's real Android phone: observe compact UI trees, device state, notifications, and screenshots (`observe`), tap/type/scroll/open apps and manage clipboard (`act`), read and write shared storage (`files`), hand off sensitive steps to the user (`handoff`), and run allowlisted commands (`shell`). File deletes, handoffs, and shell commands wait for a real on-glass tap (unless the user enabled exact-match auto-approval for allowlisted recon shell commands). You cannot approve for them.
 
 This works for any agent that can run shell commands. MCP is optional: every step below is a `phone` shell command, so you do not need to restart to finish setup.
 

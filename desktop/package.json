@@ -1,10 +1,20 @@
 {
-  "name": "@orkestrate/phone-relay",
-  "version": "0.1.0",
-  "description": "phone MCP + embedded relay (v0 core)",
+  "name": "@orkestrate/phone",
+  "version": "0.21.3",
+  "description": "Phone MCP: 5-tool MCP server, relay, and CLI for Android",
+  "license": "MIT",
   "type": "module",
+  "bin": {
+    "phone": "./src/index.ts"
+  },
+  "files": [
+    "src/",
+    "README.md"
+  ],
+  "repository": "https://github.com/orkestrate-dot-space/phone",
   "scripts": {
     "start": "bun src/index.ts",
-    "serve": "bun src/index.ts --serve"
+    "serve": "bun src/index.ts --serve",
+    "test": "bun test"
   }
 }

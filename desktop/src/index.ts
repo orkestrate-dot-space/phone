@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 // phone desktop process v1 — MCP (stdio) + embedded relay (HTTP+WS).
 // Logs go to stderr ALWAYS (stdout is the MCP channel). No deps.
 
@@ -53,7 +54,7 @@ async function remoteCall(name: string, params?: unknown): Promise<any> {
 const CLI = new Set([
   "pair", "wait", "device", "battery", "screen", "act", "apps", "files",
   "notifications", "clipboard", "handoff", "status", "doctor", "revoke",
-  "photo", "exec", "update", "devices", "install-app", "observe", "shell",
+  "photo", "exec", "devices", "install-app", "observe", "shell",
 ]);
 const CLI_TOOL: Record<string, string> = { wait: "pair_wait", photo: "capture_photo", devices: "pair_list" };
 
@@ -166,6 +167,9 @@ async function runCli(cmd: string, args: string[]) {
   if (cmd === "observe") {
     params.include = rest.length ? rest : ["screen"];
     if (flag("--screenshot")) params.include = [...new Set([...(params.include as string[]), "screenshot"])];
+    if (flag("--diff")) params.diff = true;
+    const findArg = args.find(a => a.startsWith("--find="));
+    if (findArg) params.find = findArg.slice(7);
   }
   const out = await remoteCall(CLI_TOOL[cmd] ?? cmd, params);
   if (cmd === "pair") {
