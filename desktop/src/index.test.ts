@@ -2,6 +2,16 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  adbFiles,
+  adbShell,
+  assertJailedRemotePath,
+  formatCompactTree,
+  lastNodesBySerial,
+  parseUiAutomatorXml,
+  resolveAdbRef,
+  toMcpContent,
+} from "./adb";
 
 const PORT = 19897;
 let dir = "";
@@ -160,5 +170,115 @@ describe("phone desktop relay + MCP", () => {
     const rev = await rpc("tools/call", { name: "revoke", arguments: { deviceId } });
     expect(JSON.parse(rev.result.content[0].text).revoked).toBe(deviceId);
     ws.close();
+  });
+
+  test("tools/list: observe is read-only, devices enum + device params present", async () => {
+    const list = await rpc("tools/list");
+    const byName = Object.fromEntries(list.result.tools.map((t: any) => [t.name, t]));
+    expect(byName.observe.annotations).toEqual({ readOnlyHint: true });
+    const include = byName.observe.inputSchema.properties.include.items.enum;
+    expect(include).toContain("devices");
+    expect(byName.observe.inputSchema.properties.device.type).toBe("string");
+    for (const n of ["act", "files", "handoff", "shell"])
+      expect(byName[n].inputSchema.properties.device.type).toBe("string");
+  });
+});
+
+describe("adb driver (no live phone/adb daemon)", () => {
+  const XML = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="com.example" content-desc="" checkable="false" checked="false" clickable="false" enabled="true" focusable="false" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[0,0][1080,2400]">
+    <node index="0" text="Hello &amp; goodbye &lt;3" resource-id="com.example:id/title" class="android.widget.TextView" package="com.example" content-desc="" checkable="false" checked="false" clickable="false" focusable="false" focused="false" scrollable="false" bounds="[100,200][980,300]" />
+    <node index="1" text="" resource-id="" class="android.view.ViewGroup" package="com.example" content-desc="" checkable="false" checked="false" clickable="false" focusable="false" focused="false" scrollable="false" bounds="[0,300][1080,600]" />
+    <node index="2" text="OK" resource-id="" class="android.widget.Button" package="com.example" content-desc="Confirm &quot;yes&quot; &#39;A&#39; &#65;" checkable="false" checked="false" clickable="true" focusable="true" focused="false" scrollable="false" bounds="[100,700][500,800]" />
+    <node index="3" text="" resource-id="" class="android.widget.EditText" package="com.example" content-desc="" checkable="false" checked="false" clickable="true" focusable="true" focused="true" scrollable="false" bounds="[100,900][980,1000]" />
+  </node>
+</hierarchy>`;
+
+  test("parseUiAutomatorXml: entities, bounds, filtering, @e1.. refs", () => {
+    const nodes = parseUiAutomatorXml(XML);
+    // FrameLayout container + empty ViewGroup are filtered; TextView/Button/EditText kept.
+    expect(nodes.map((n) => n.ref)).toEqual(["@e1", "@e2", "@e3"]);
+    expect(nodes[0].text).toBe("Hello & goodbye <3");
+    expect(nodes[0].role).toBe("TextView");
+    expect(nodes[0].bounds).toEqual([100, 200, 980, 300]);
+    expect(nodes[0].clickable).toBe(false);
+    expect(nodes[1].role).toBe("Button");
+    expect(nodes[1].clickable).toBe(true);
+    expect(nodes[1].desc).toBe('Confirm "yes" \'A\' A'); // &quot; &#39; &#65;
+    expect(nodes[2].role).toBe("EditText");
+    expect(nodes[2].editable).toBe(true);
+    expect(nodes[2].focused).toBe(true);
+    expect(nodes.every((n) => n.package === "com.example")).toBe(true);
+  });
+
+  test("formatCompactTree renders @eN lines with labels, bounds, flags", () => {
+    const tree = formatCompactTree(parseUiAutomatorXml(XML));
+    const lines = tree.split("\n");
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toBe('@e1 TextView "Hello & goodbye <3" [100,200,980,300]');
+    expect(lines[1]).toContain('@e2 Button "OK"');
+    expect(lines[1]).toContain("click");
+    expect(lines[2]).toContain("edit");
+  });
+
+  test("resolveAdbRef: center hit, stale + unknown-serial errors", () => {
+    lastNodesBySerial.set("test-serial", parseUiAutomatorXml(XML));
+    const hit = resolveAdbRef("test-serial", "@e2");
+    expect(hit.x).toBe(300); // (100+500)/2
+    expect(hit.y).toBe(750); // (700+800)/2
+    expect(() => resolveAdbRef("test-serial", "@e9")).toThrow(/stale ref "@e9"/);
+    expect(() => resolveAdbRef("test-serial", "@e9")).toThrow(/call observe first/);
+    expect(() => resolveAdbRef("never-seen", "@e1")).toThrow(/call observe first/);
+    lastNodesBySerial.delete("test-serial");
+  });
+
+  test("adbShell is blocked by default", () => {
+    expect(() => adbShell("any-serial", ["echo", "hi"])).toThrow(/blocked by default.*--allow-shell/);
+  });
+
+  test("adbFiles.delete is ALWAYS refused", async () => {
+    await expect(adbFiles("any-serial", { action: "delete", path: "/sdcard/whatever" })).rejects.toThrow(
+      /ALWAYS refused/,
+    );
+  });
+
+  test("adbFiles.push/write jail: rejects /sdcard/DCIM + .. traversal, allows the jail", async () => {
+    await expect(
+      adbFiles("any-serial", { action: "push", localPath: "/tmp/x", path: "/sdcard/DCIM/photo.jpg" }),
+    ).rejects.toThrow(/jailed to \/sdcard\/Download\/orkestrate\//);
+    await expect(
+      adbFiles("any-serial", { action: "push", localPath: "/tmp/x", path: "/sdcard/Download/orkestrate/../evil.apk" }),
+    ).rejects.toThrow(/traversal/);
+    await expect(
+      adbFiles("any-serial", { action: "write", path: "/sdcard/Music/note.txt", content: "hi" }),
+    ).rejects.toThrow(/jailed to/);
+    expect(assertJailedRemotePath("/sdcard/Download/orkestrate/notes/a.txt")).toBe(
+      "/sdcard/Download/orkestrate/notes/a.txt",
+    );
+  });
+
+  test("toMcpContent: screenshot becomes a native image block, base64 stays out of text", () => {
+    const content = toMcpContent({
+      tree: "@e1 Button",
+      screenshot_b64: Buffer.from("fakepng").toString("base64"),
+      screenshotMime: "image/png",
+      screenshotPath: "/tmp/phone-screen-abc.png",
+    });
+    expect(content).toHaveLength(2);
+    expect(content[0]).toEqual({
+      type: "text",
+      text: expect.not.stringContaining("ZmFrZXBuZw=="),
+    });
+    const text = (content[0] as { text: string }).text;
+    expect(text).toContain("/tmp/phone-screen-abc.png"); // path intact
+    expect(content[1]).toEqual({ type: "image", data: "ZmFrZXBuZw==", mimeType: "image/png" });
+  });
+
+  test("toMcpContent defaults to image/jpeg and skips image block when absent", () => {
+    const withDefault = toMcpContent({ tree: "x", screenshot_b64: "eA==" });
+    expect(withDefault[1]).toEqual({ type: "image", data: "eA==", mimeType: "image/jpeg" });
+    const plain = toMcpContent({ tree: "x" });
+    expect(plain).toEqual([{ type: "text", text: JSON.stringify({ tree: "x" }, null, 2) }]);
   });
 });

@@ -16,6 +16,22 @@ import { chmodSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { networkInterfaces, tmpdir } from "node:os";
 import { basename } from "node:path";
 import { qrPng, qrText } from "./qr";
+import {
+  adbAct,
+  adbFiles,
+  adbHandoff,
+  adbObserve,
+  adbShell,
+  formatCompactTree,
+  listAdbDevices,
+  resolveAdbDevice,
+  toMcpContent,
+} from "./adb";
+import pkg from "../package.json";
+
+const VERSION = (pkg as { version?: string }).version ?? "0.24.0";
+// Raw `adb shell` is blocked by default; this flag (or env) opts the relay process into it.
+const ALLOW_SHELL = process.argv.includes("--allow-shell") || process.env.PHONE_ALLOW_SHELL === "1";
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // 32 symbols, no I/L/O/U
 const rand = (n: number) => crypto.getRandomValues(new Uint8Array(n));
@@ -119,7 +135,15 @@ async function runCli(cmd: string, args: string[]) {
   const params: Record<string, unknown> = {};
   if (cmd === "revoke") params.deviceId = rest[0];
   if (cmd === "wait" && rest[0]) params.code = rest[0];
-  if (cmd === "exec") params.argv = args.slice(args[0] === "--" ? 1 : 0);
+  if (cmd === "exec" || cmd === "shell") {
+    const dash = args.indexOf("--");
+    const flagIdx = args.indexOf("--allow-shell");
+    if (flagIdx !== -1 && (dash === -1 || flagIdx < dash)) {
+      (params as Record<string, unknown>).allowShell = true;
+      args.splice(flagIdx, 1);
+    }
+    params.argv = args.slice(args[0] === "--" ? 1 : 0);
+  }
   if (cmd === "screen") {
     if (flag("--screenshot")) params.screenshot = true;
   }
@@ -163,7 +187,6 @@ async function runCli(cmd: string, args: string[]) {
   }
   const relayArg = args.find(a => a.startsWith("--relay="));
   if (cmd === "pair" && relayArg) params.relay = relayArg.slice(8);
-  if (cmd === "shell") params.argv = args.slice(args[0] === "--" ? 1 : 0);
   if (cmd === "observe") {
     params.include = rest.length ? rest : ["screen"];
     if (flag("--screenshot")) params.include = [...new Set([...(params.include as string[]), "screenshot"])];
@@ -239,9 +262,6 @@ const waiting = new Map<string, Waiter>(); // by job id, queued or delivered
 const delivered = new Set<string>(); // job ids already pushed down the socket
 const sockets = new Map<string, any>(); // deviceId -> ws
 const online = (id: string) => sockets.has(id);
-// Online device first, else the most recently seen (queue flushes on hello).
-const pickDevice = () => [...devices.values()]
-  .sort((a, b) => Number(online(b.id)) - Number(online(a.id)) || b.lastSeen - a.lastSeen)[0];
 
 function deliver(deviceId: string, w: Waiter) {
   const id = (w.job as any).id as string;
@@ -434,13 +454,15 @@ const TOOLS = [
   {
     name: "observe",
     description: "Observe the phone: compact UI tree (@e1..), device/battery/permissions, active notifications, installed apps, or screenshot. Defaults to [\"screen\"].",
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: "object",
       properties: {
         include: {
           type: "array",
-          items: { type: "string", enum: ["screen", "device", "notifications", "apps", "screenshot"] },
+          items: { type: "string", enum: ["screen", "device", "notifications", "apps", "screenshot", "devices"] },
         },
+        device: { type: "string", description: "Paired relay device id/name, or ADB serial/model. Defaults to the online relay device, else the ADB device." },
         maxPx: { type: "number" },
         quality: { type: "number" },
         query: { type: "string" },
@@ -474,6 +496,7 @@ const TOOLS = [
         url: { type: "string" },
         steps: { type: "array", items: { type: "object" } },
         observe: { type: "boolean" },
+        device: { type: "string", description: "Paired relay device id/name, or ADB serial/model. Defaults to the online relay device, else the ADB device." },
       },
       additionalProperties: false,
     },
@@ -492,6 +515,7 @@ const TOOLS = [
         encoding: { type: "string", enum: ["utf8", "base64"] },
         query: { type: "string" },
         maxBytes: { type: "number" },
+        device: { type: "string", description: "Paired relay device id/name, or ADB serial/model. Defaults to the online relay device, else the ADB device." },
       },
       required: ["action"],
       additionalProperties: false,
@@ -505,6 +529,7 @@ const TOOLS = [
       properties: {
         message: { type: "string" },
         timeoutSec: { type: "number" },
+        device: { type: "string", description: "Paired relay device id/name, or ADB serial/model. Defaults to the online relay device, else the ADB device." },
       },
       required: ["message"],
       additionalProperties: false,
@@ -512,12 +537,13 @@ const TOOLS = [
   },
   {
     name: "shell",
-    description: "Run an allowlisted system command on the phone (on-glass approval unless exact-match auto-approved).",
+    description: "Run an allowlisted system command on the phone (on-glass approval unless exact-match auto-approved). Over ADB it is blocked by default; pass --allow-shell to permit it.",
     inputSchema: {
       type: "object",
       properties: {
         argv: { type: "array", items: { type: "string" } },
         timeoutSec: { type: "number" },
+        device: { type: "string", description: "Paired relay device id/name, or ADB serial/model. Defaults to the online relay device, else the ADB device." },
       },
       required: ["argv"],
       additionalProperties: false,
@@ -578,10 +604,45 @@ function publicRelay(override?: string): { url: string; kind: string; warning?: 
       : "LAN address: the phone must be on the same Wi-Fi. For use anywhere, set up a tunnel (see agent.md) and rerun pair." };
 }
 
-function requireDevice(): Device {
-  const dev = pickDevice();
-  if (!dev) throw new Error("no-device: pair the app and keep it online");
-  return dev;
+type Route = { kind: "relay"; dev: Device } | { kind: "adb"; serial: string };
+
+function relayDeviceByName(idOrName: string): Device | undefined {
+  return devices.get(idOrName) ?? [...devices.values()].find((d) => d.name === idOrName);
+}
+
+function noDeviceErr(): Error {
+  return new Error(
+    "no-device: no online paired phone and no adb device found. " +
+      "Run `adb devices` (USB / emulator / `adb connect <ip>:<port>`) for local control, " +
+      "or `phone pair` to pair the companion app for remote access.",
+  );
+}
+
+/**
+ * Pick a transport for a device-touching call.
+ * - `device` given and matching a paired relay device (id or name) → Relay.
+ * - no `device`, but an online paired relay device exists → Relay.
+ * - otherwise → ADB (resolve serial/model, auto-select when exactly 1 online).
+ * - neither available → self-correcting error mentioning `adb devices` and `phone pair`.
+ */
+async function routeTarget(requested?: unknown): Promise<Route> {
+  const req = typeof requested === "string" && requested.trim() ? requested.trim() : undefined;
+  if (req) {
+    const rd = relayDeviceByName(req);
+    if (rd) return { kind: "relay", dev: rd };
+    try {
+      return { kind: "adb", serial: resolveAdbDevice(req) };
+    } catch (e) {
+      throw new Error(`unknown device "${req}": ${(e as Error).message} — see also \`phone pair\``);
+    }
+  }
+  const on = [...devices.values()].find((d) => online(d.id));
+  if (on) return { kind: "relay", dev: on };
+  try {
+    return { kind: "adb", serial: resolveAdbDevice(undefined) };
+  } catch {
+    throw noDeviceErr();
+  }
 }
 
 async function localCall(rawName: string, params?: any) {
@@ -664,7 +725,9 @@ async function localCall(rawName: string, params?: any) {
     });
   }
   if (name === "phone.device") {
-    const dev = requireDevice();
+    const t = await routeTarget(params?.device);
+    if (t.kind === "adb") return (await adbObserve(t.serial, { include: ["device"] })).device;
+    const dev = t.dev;
     try {
       return await sendJob(dev.id, "device.info", {}) as Record<string, unknown>;
     } catch (e) {
@@ -676,11 +739,24 @@ async function localCall(rawName: string, params?: any) {
     }
   }
   if (name === "phone.battery") {
-    const dev = requireDevice();
+    const t = await routeTarget(params?.device);
+    if (t.kind === "adb") {
+      const info = (await adbObserve(t.serial, { include: ["device"] })).device as Record<string, unknown>;
+      return { level: info.batteryLevel, status: info.batteryStatus, model: info.model };
+    }
+    const dev = t.dev;
     return await sendJob(dev.id, "battery.get", {}) as Record<string, unknown>;
   }
   if (name === "phone.screen") {
-    const dev = requireDevice();
+    const t = await routeTarget(params?.device);
+    if (t.kind === "adb") {
+      const res = await adbObserve(t.serial, {
+        include: params?.screenshot ? ["screen", "screenshot"] : ["screen"],
+      });
+      if (!params?.inlineBase64) delete res.screenshot_b64;
+      return res;
+    }
+    const dev = t.dev;
     const res = await sendJob(dev.id, "screen.observe", {
       screenshot: Boolean(params?.screenshot),
       maxPx: params?.maxPx ?? 1080,
@@ -698,21 +774,41 @@ async function localCall(rawName: string, params?: any) {
     return res;
   }
   if (name === "phone.act_legacy") {
-    const dev = requireDevice();
+    const t = await routeTarget(params?.device);
     if (!params?.action) throw new Error("action is required");
-    return await sendJob(dev.id, "screen.act", params) as Record<string, unknown>;
+    if (t.kind === "adb") return adbAct(t.serial, params);
+    const dev = t.dev;
+    const { device: _omitAct, ...jobParams } = params;
+    return await sendJob(dev.id, "screen.act", jobParams) as Record<string, unknown>;
   }
   if (name === "phone.apps") {
-    const dev = requireDevice();
+    const t = await routeTarget(params?.device);
     if (!params?.action) throw new Error("action is required");
-    return await sendJob(dev.id, "apps.manage", params) as Record<string, unknown>;
+    if (t.kind === "adb") {
+      if (params.action === "open") {
+        if (params.package || params.url)
+          return adbAct(t.serial, { action: "open", package: params.package, url: params.url });
+        throw new Error("apps open needs package or url");
+      }
+      if (params.action === "list")
+        return await adbObserve(t.serial, { include: ["apps"], query: params?.query });
+      throw new Error(
+        `apps.${params.action} is not supported over ADB (only list/open): pair the companion app for full app management`,
+      );
+    }
+    const dev = t.dev;
+    const { device: _omitApps, ...appParams } = params;
+    return await sendJob(dev.id, "apps.manage", appParams) as Record<string, unknown>;
   }
   if (name === "phone.files") {
-    const dev = requireDevice();
+    const t = await routeTarget(params?.device);
     const action = params?.action;
     if (!action) throw new Error("action is required");
+    if (t.kind === "adb") return await adbFiles(t.serial, params);
+    const dev = t.dev;
     const jobParams: Record<string, unknown> = { ...params };
     delete jobParams.localPath;
+    delete jobParams.device;
     if (action === "push") {
       if (!params.localPath) throw new Error("localPath is required for push");
       const f = Bun.file(params.localPath);
@@ -734,24 +830,41 @@ async function localCall(rawName: string, params?: any) {
     return res;
   }
   if (name === "phone.notifications") {
-    const dev = requireDevice();
+    const t = await routeTarget(params?.device);
     if (!params?.action) throw new Error("action is required");
-    return await sendJob(dev.id, "notifications.op", params) as Record<string, unknown>;
+    if (t.kind === "adb") {
+      if (params.action === "list") return await adbObserve(t.serial, { include: ["notifications"] });
+      throw new Error(
+        `notifications.${params.action} is not supported over ADB (only list): pair the companion app for dismiss/reply`,
+      );
+    }
+    const dev = t.dev;
+    const { device: _omitNotif, ...notifParams } = params;
+    return await sendJob(dev.id, "notifications.op", notifParams) as Record<string, unknown>;
   }
   if (name === "phone.clipboard") {
-    const dev = requireDevice();
+    const t = await routeTarget(params?.device);
     if (!params?.action) throw new Error("action is required");
-    return await sendJob(dev.id, "clipboard.op", params) as Record<string, unknown>;
+    if (t.kind === "adb")
+      throw new Error("clipboard is not supported over ADB: pair the companion app for clipboard access");
+    const dev = t.dev;
+    const { device: _omitClip, ...clipParams } = params;
+    return await sendJob(dev.id, "clipboard.op", clipParams) as Record<string, unknown>;
   }
   if (name === "phone.handoff") {
-    const dev = requireDevice();
+    const t = await routeTarget(params?.device);
     const message = String(params?.message ?? "").trim();
     if (!message) throw new Error("message is required");
+    if (t.kind === "adb") return await adbHandoff(t.serial, message);
+    const dev = t.dev;
     const timeoutSec = Math.min(Math.max(Number(params?.timeoutSec ?? 300), 30), 600);
     return await sendJob(dev.id, "human.handoff", { message, timeoutSec }, timeoutSec * 1000) as Record<string, unknown>;
   }
   if (name === "phone.capture_photo") {
-    const dev = requireDevice();
+    const t = await routeTarget(params?.device);
+    if (t.kind === "adb")
+      throw new Error("capture_photo is not supported over ADB (no camera API): use observe with include [\"screenshot\"]");
+    const dev = t.dev;
     const res = await sendJob(dev.id, "photo.capture", {
       maxPx: params?.maxPx ?? 1280,
       quality: params?.quality ?? 80,
@@ -768,10 +881,12 @@ async function localCall(rawName: string, params?: any) {
     return res;
   }
   if (name === "phone.exec") {
-    const dev = requireDevice();
+    const t = await routeTarget(params?.device);
     const argv = params?.argv;
     if (!Array.isArray(argv) || argv.length === 0 || argv.some((a: unknown) => typeof a !== "string"))
       throw new Error("argv must be a non-empty string array");
+    if (t.kind === "adb") return adbShell(t.serial, argv, params?.allowShell === true || ALLOW_SHELL);
+    const dev = t.dev;
     return await sendJob(dev.id, "exec.run",
       { argv, timeoutSec: Math.min(Math.max(params?.timeoutSec ?? 30, 5), 120) }, 300000) as Record<string, unknown>;
   }
@@ -781,19 +896,67 @@ async function localCall(rawName: string, params?: any) {
   if (name === "phone.observe") {
     const inc = new Set<string>(Array.isArray(params?.include) && params.include.length ? params.include : ["screen"]);
     const wantShot = inc.has("screenshot");
-    const tasks: Promise<void>[] = [];
     const out: Record<string, unknown> = {};
+    if (inc.has("devices")) {
+      out.relay = [...devices.values()].map((d) => ({
+        id: d.id,
+        name: d.name,
+        appVersion: d.appVersion ?? null,
+        online: online(d.id),
+        paused: d.paused ?? false,
+        permissions: d.permissions ?? null,
+        caps: d.caps ?? null,
+        lastSeen: d.lastSeen,
+      }));
+      try {
+        out.adb = listAdbDevices();
+      } catch (e) {
+        log("adb list failed:", (e as Error).message);
+        out.adb = [];
+      }
+      inc.delete("devices");
+      if (inc.size === 0) return out;
+    }
+    const t = await routeTarget(params?.device);
+    if (t.kind === "adb") {
+      const r = await adbObserve(t.serial, {
+        include: [...inc],
+        query: params?.query,
+        find: params?.find,
+      });
+      if (typeof r.tree === "string" && r.tree && params?.diff) {
+        const key = `adb:${t.serial}`;
+        const prev = lastTreeByDevice.get(key);
+        lastTreeByDevice.set(key, r.tree as string);
+        if (prev !== undefined) {
+          const prevSet = new Set(prev.split("\n"));
+          const changed = (r.tree as string).split("\n").filter((l) => !prevSet.has(l));
+          if (changed.length === 0) { r.unchanged = true; r.tree = ""; }
+          else r.tree = changed.join("\n");
+        }
+      }
+      if (!params?.inlineBase64) delete r.screenshot_b64;
+      if ("relay" in out || "adb" in out) { r.relay = out.relay; r.adb = out.adb; }
+      return r;
+    }
+    const dev = t.dev;
+    const tasks: Promise<void>[] = [];
     if (inc.has("screen") || wantShot) {
-      tasks.push(localCall("phone.screen", { screenshot: wantShot, maxPx: params?.maxPx, quality: params?.quality }).then((s) => {
+      tasks.push(localCall("phone.screen", {
+        screenshot: wantShot,
+        maxPx: params?.maxPx,
+        quality: params?.quality,
+        device: dev.id,
+        inlineBase64: params?.inlineBase64,
+      }).then((s) => {
         out.package = s.package ?? "";
         out.blocked = s.blocked ?? false;
         out.secureScreen = s.secureScreen ?? false;
         if (s.reason) out.reason = s.reason;
         if (Array.isArray(s.nodes)) {
           let tree = formatCompactTree(s.nodes as any[]);
-          const devId = requireDevice().id;
-          const prev = lastTreeByDevice.get(devId);
-          lastTreeByDevice.set(devId, tree);
+          const prev = lastTreeByDevice.get(dev.id);
+          lastTreeByDevice.set(dev.id, tree);
           if (params?.diff && prev !== undefined) {
             const prevSet = new Set(prev.split("\n"));
             const changed = tree.split("\n").filter((l) => !prevSet.has(l));
@@ -807,45 +970,69 @@ async function localCall(rawName: string, params?: any) {
           out.tree = tree;
         }
         if (s.screenshotPath) out.screenshotPath = s.screenshotPath;
+        if (typeof s.screenshot_b64 === "string") out.screenshot_b64 = s.screenshot_b64;
+        if (typeof s.screenshotMime === "string") out.screenshotMime = s.screenshotMime;
       }));
     }
-    if (inc.has("device")) tasks.push(localCall("phone.device", {}).then((d) => { out.device = d; }));
-    if (inc.has("notifications")) tasks.push(localCall("phone.notifications", { action: "list" }).then((n) => { out.notifications = n.notifications ?? n; }));
-    if (inc.has("apps")) tasks.push(localCall("phone.apps", { action: "list", query: params?.query }).then((a) => { out.apps = a.apps ?? a; }));
+    if (inc.has("device")) tasks.push(localCall("phone.device", { device: dev.id }).then((d) => { out.device = d; }));
+    if (inc.has("notifications")) tasks.push(localCall("phone.notifications", { action: "list", device: dev.id }).then((n) => { out.notifications = n.notifications ?? n; }));
+    if (inc.has("apps")) tasks.push(localCall("phone.apps", { action: "list", query: params?.query, device: dev.id }).then((a) => { out.apps = a.apps ?? a; }));
     await Promise.all(tasks);
+    if (!params?.inlineBase64) delete out.screenshot_b64;
     return out;
   }
   if (name === "phone.act") {
+    const t = await routeTarget(params?.device);
     const steps: any[] = Array.isArray(params?.steps) && params.steps.length ? params.steps : [params];
+    if (t.kind === "adb") {
+      const results: unknown[] = [];
+      for (const step of steps) {
+        const a = step?.action;
+        if (!a) throw new Error("action is required");
+        if (a === "clipboard_get" || a === "clipboard_set" || a === "dismiss_notification")
+          throw new Error(`${a} is not supported over ADB: pair the companion app for clipboard/notification actions`);
+        results.push(adbAct(t.serial, step));
+      }
+      const res: Record<string, unknown> = { ok: true, transport: "adb", device: t.serial, results };
+      if (params?.observe !== false) {
+        await Bun.sleep(250);
+        res.screen = await adbObserve(t.serial, { include: ["screen"] });
+      }
+      return res;
+    }
+    const dev = t.dev;
     const results: unknown[] = [];
     let uiTouched = false;
     for (const step of steps) {
       const a = step?.action;
       if (!a) throw new Error("action is required");
       if (a === "open") {
-        results.push(await localCall("phone.apps", { action: "open", package: step.package, url: step.url }));
+        results.push(await localCall("phone.apps", { action: "open", package: step.package, url: step.url, device: dev.id }));
         uiTouched = true;
       } else if (a === "clipboard_get") {
-        results.push(await localCall("phone.clipboard", { action: "get" }));
+        results.push(await localCall("phone.clipboard", { action: "get", device: dev.id }));
       } else if (a === "clipboard_set") {
-        results.push(await localCall("phone.clipboard", { action: "set", text: step.text }));
+        results.push(await localCall("phone.clipboard", { action: "set", text: step.text, device: dev.id }));
       } else if (a === "dismiss_notification") {
-        results.push(await localCall("phone.notifications", { action: "dismiss", key: step.key }));
+        results.push(await localCall("phone.notifications", { action: "dismiss", key: step.key, device: dev.id }));
       } else {
-        const dev = requireDevice();
-        results.push(await sendJob(dev.id, "screen.act", step));
+        const { device: _omitStep, ...stepParams } = step ?? {};
+        results.push(await sendJob(dev.id, "screen.act", stepParams));
         uiTouched = true;
       }
     }
     const res: Record<string, unknown> = { ok: true, results };
     if (uiTouched && params?.observe !== false) {
       await Bun.sleep(250);
-      res.screen = await localCall("phone.observe", { include: ["screen"] });
+      res.screen = await localCall("phone.observe", { include: ["screen"], device: dev.id });
     }
     return res;
   }
   if (name === "phone.update") {
-    const dev = requireDevice();
+    const t = await routeTarget(params?.device);
+    if (t.kind === "adb")
+      throw new Error("app update needs the companion app: over ADB, install it with `phone install-app` instead");
+    const dev = t.dev;
     let meta: any = null;
     try { meta = await Bun.file(DIST_DIR + "/version.json").json(); }
     catch { throw new Error("no build published in dist/"); }
@@ -857,15 +1044,6 @@ async function localCall(rawName: string, params?: any) {
 }
 
 const lastTreeByDevice = new Map<string, string>();
-
-function formatCompactTree(nodes: any[]): string {
-  return nodes.map((n) => {
-    const label = [n.text, n.desc].filter(Boolean).map((s: string) => JSON.stringify(s)).join(" ");
-    const flags = [n.clickable && "click", n.editable && "edit", n.scrollable && "scroll", n.checked && "checked", n.focused && "focused"].filter(Boolean).join(",");
-    const b = Array.isArray(n.bounds) ? `[${n.bounds.join(",")}]` : "";
-    return `${n.ref} ${n.role || "View"}${label ? " " + label : ""} ${b}${flags ? " " + flags : ""}`.trim();
-  }).join("\n");
-}
 
 function reply(id: unknown, result: unknown) {
   try {
@@ -885,7 +1063,7 @@ async function handle(msg: any) {
     switch (msg.method) {
       case "initialize":
         if (id !== undefined) reply(id, { protocolVersion: "2024-11-05",
-          capabilities: { tools: {} }, serverInfo: { name: "phone", version: "0.2.0" } });
+          capabilities: { tools: {} }, serverInfo: { name: "phone", version: VERSION } });
         break;
       case "notifications/initialized": break;
       case "ping": if (id !== undefined) reply(id, {}); break;
@@ -895,13 +1073,11 @@ async function handle(msg: any) {
       case "tools/call": {
         const name = msg.params?.name;
         try {
-          const out = await callTool(name, msg.params?.arguments);
-          if (id !== undefined) {
-            const { qr, ...rest } = (out ?? {}) as Record<string, unknown>;
-            const content: { type: "text"; text: string }[] = [{ type: "text", text: JSON.stringify(rest, null, 2) }];
-            if (typeof qr === "string") content.push({ type: "text", text: qr });
-            reply(id, { content });
-          }
+          const args = (msg.params?.arguments ?? {}) as Record<string, unknown>;
+          // Screenshots ride along for the image-block builder, never for JSON text.
+          const wantShot = name === "observe" || name === "phone.observe" || name === "screen" || name === "phone.screen";
+          const out = await callTool(name, wantShot ? { ...args, inlineBase64: true } : args);
+          if (id !== undefined) reply(id, { content: toMcpContent(out) });
         } catch (e) { if (id !== undefined) replyErr(id, -32000, (e as Error).message); }
         break;
       }
