@@ -38,6 +38,62 @@ class Relay(
   @Volatile private var wantUp = false
 
   private val fileStore = SafFileStore(ctx, store, shizuku)
+
+  /**
+   * Local (loopback MCP) shell approvals. Same on-glass card as relay
+   * exec.run when the user picked "Always ask me" (Store.APPROVAL_ASK).
+   * With the default "Let fx decide" (Store.APPROVAL_FX), fx's auto-mode
+   * reviewer already cleared the call and no card is raised. Relay shell
+   * tier (ExecRunner/exec.run from a remote machine) always uses the card
+   * policy regardless of this setting.
+   *
+   * The blocked MCP handler thread only proceeds when a real tap calls
+   * [decideLocalShell]. No code path completes one without a tap —
+   * auto-run happens only for the exact ExecPolicy.allowlisted argv, same
+   * rule as the relay tier.
+   *
+   * Declared before [localMcp] so the gate is wired at construction.
+   */
+  private data class LocalShellReq(
+    val params: JSONObject,
+    val latch: java.util.concurrent.CountDownLatch,
+    @Volatile var approved: Boolean = false,
+  )
+
+  private val localShell = mutableMapOf<String, LocalShellReq>()
+
+  private val shellGate = object : LocalMcpServer.ShellGate {
+    override fun approveShell(cmd: String, argv: List<String>): Boolean {
+      // fx-decides mode: fx's auto-mode reviewer cleared the call, no card.
+      // Always-ask mode: same decision path as the relay shell tier.
+      if (!LocalAuth.shellNeedsCard(store.autoApprove, argv, store.fxApproval == Store.APPROVAL_FX)) return true
+      val id = "local-shell-${System.currentTimeMillis()}"
+      val req = LocalShellReq(
+        JSONObject().put("argv", org.json.JSONArray(argv)).put("cmd", cmd),
+        java.util.concurrent.CountDownLatch(1),
+      )
+      synchronized(localShell) { localShell[id] = req }
+      try {
+        val l = listener ?: return false // no approval UI: fail closed
+        l.onApproval(id, "exec.run")
+        return req.latch.await(LOCAL_SHELL_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS) && req.approved
+      } catch (_: Exception) {
+        return false
+      } finally {
+        synchronized(localShell) { localShell.remove(id) }
+      }
+    }
+  }
+
+  internal val localMcp = LocalMcpServer(ctx, store, shizuku, onHandoff = { id, reason ->
+    listener?.onApproval(id, "human.handoff: $reason")
+  }).also { s ->
+    s.onToolEvent = { tool, detail ->
+      listener?.onJob(if (detail.isNotBlank()) "$tool · $detail" else tool)
+    }
+    s.shellGate = shellGate
+  }
+  internal val phoneAgent = PhoneAgent(ctx, store, localMcp)
   @Volatile private var usingLan = false
   private var wifiCb: ConnectivityManager.NetworkCallback? = null
 
@@ -45,11 +101,25 @@ class Relay(
 
   private val ALWAYS_GATED = setOf("photo.capture", "human.handoff", "exec.run")
 
-  fun pendingApproval(id: String): Boolean = synchronized(approvals) { approvals.containsKey(id) }
+  companion object {
+    /** How long an MCP `shell` call blocks waiting for the on-glass tap. */
+    const val LOCAL_SHELL_TIMEOUT_MS = 120_000L
+  }
+
+  fun isLocalShellApproval(id: String): Boolean = synchronized(localShell) { localShell.containsKey(id) }
+
+  fun decideLocalShell(id: String, approved: Boolean) {
+    val req = synchronized(localShell) { localShell[id] } ?: return
+    req.approved = approved
+    req.latch.countDown()
+  }
+
+  fun pendingApproval(id: String): Boolean = synchronized(approvals) { approvals.containsKey(id) } ||
+    synchronized(localShell) { localShell.containsKey(id) }
 
   fun jobParams(id: String): JSONObject? = synchronized(approvals) {
     approvals[id]?.second?.optJSONObject("params")
-  }
+  } ?: synchronized(localShell) { localShell[id]?.params }
 
   private val http = OkHttpClient.Builder()
     .connectTimeout(10, TimeUnit.SECONDS)
@@ -119,6 +189,7 @@ class Relay(
   fun disconnect() {
     wantUp = false
     unregisterWifiCallback()
+    localMcp.stop()
     try { ws?.close(1000, "ui") } catch (_: Exception) {}
     ws = null
     listener?.onState("offline")

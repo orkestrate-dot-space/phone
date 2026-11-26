@@ -12,6 +12,8 @@ class PhoneApp : Application() {
     private set
   lateinit var relay: Relay
     private set
+  lateinit var acpBridge: AcpJoinBridge
+    private set
   lateinit var updater: AppUpdater
     private set
   @Volatile var uiListener: Relay.Listener? = null
@@ -21,6 +23,7 @@ class PhoneApp : Application() {
     store = Store(this)
     shizuku = ShizukuBridge(this)
     relay = Relay(this, store, shizuku)
+    acpBridge = AcpJoinBridge(this, store, relay.phoneAgent)
     updater = AppUpdater(this, store, shizuku)
   }
 

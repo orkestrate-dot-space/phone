@@ -224,17 +224,19 @@ data class HomeState(
   val recent: List<RecentJob>,
   val updateBanner: String? = null,
   val updateProgress: Float? = null,
+  val agentsStatus: String = "",
+  val agentsLinked: Boolean = false,
 )
 
-/** D · home, paired. */
+/** D · home, paired — Status & Live Activity. Monochrome. */
 @Composable
 fun HomeScreen(
   s: HomeState,
-  onTogglePause: () -> Unit,
-  onShizukuAction: () -> Unit,
-  onPickFolder: () -> Unit,
-  onOpenCameraPerm: () -> Unit,
-  onSettings: () -> Unit,
+  onTogglePause: () -> Unit = {},
+  onShizukuAction: () -> Unit = {},
+  onPickFolder: () -> Unit = {},
+  onOpenCameraPerm: () -> Unit = {},
+  onSettings: () -> Unit = {},
   onUpdateBanner: () -> Unit = {},
 ) {
   Screen(topBar = { OrkTopBar { OrkIconButton(OrkIcons.sliders, "Settings", onSettings) } }) {
@@ -247,11 +249,36 @@ fun HomeScreen(
       },
       "Agents call it ${s.name}.",
     )
-    Row(
-      Modifier.fillMaxWidth().padding(top = 12.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      OrkStatusLine(if (s.paused) DotState.Off else s.link, s.linkText, Modifier.weight(1f))
+
+    if (s.updateBanner != null) {
+      Column(
+        Modifier.fillMaxWidth().padding(top = 12.dp).clickable(role = Role.Button, onClick = onUpdateBanner)
+          .clip(RoundedCornerShape(Ork.rControl)).background(Ork.raised)
+          .border(1.dp, Ork.windowEdge, RoundedCornerShape(Ork.rControl))
+          .padding(horizontal = 14.dp, vertical = 10.dp),
+      ) {
+        OrkRowText("App update", s.updateBanner)
+        if (s.updateProgress != null) {
+          Spacer(Modifier.height(6.dp))
+          Box(Modifier.fillMaxWidth().height(3.dp).clip(CircleShape).background(Ork.rule)) {
+            Box(Modifier.fillMaxWidth(s.updateProgress.coerceIn(0f, 1f)).height(3.dp).background(Ork.ink))
+          }
+        }
+      }
+    }
+
+    Text("Status", style = OrkType.label, modifier = Modifier.padding(top = 28.dp, bottom = 4.dp))
+    OrkRow(first = true, vertical = 12.dp) {
+      OrkStatusLine(if (s.paused) DotState.Off else s.link, "Phone MCP · " + s.linkText)
+      Spacer(Modifier.height(8.dp))
+      val agentsDot = when {
+        s.agentsLinked && s.agentsStatus.startsWith("connected") -> DotState.On
+        s.agentsStatus.startsWith("connecting") || s.agentsStatus.startsWith("retry") -> DotState.Wait
+        else -> DotState.Off
+      }
+      val agentsText = if (s.agentsStatus.isBlank()) "not linked" else s.agentsStatus
+      OrkStatusLine(agentsDot, "Agents Hub · " + agentsText)
+      Spacer(Modifier.height(12.dp))
       OrkPill(
         if (s.paused) "Resume" else "Pause",
         onTogglePause,
@@ -260,32 +287,26 @@ fun HomeScreen(
         icon = if (s.paused) OrkIcons.play else OrkIcons.pause,
       )
     }
-    if (s.updateBanner != null) {
-      Spacer(Modifier.height(14.dp))
-      OrkRow(first = true, modifier = Modifier.clickable(role = Role.Button, onClick = onUpdateBanner)) {
-        OrkRowText("App update", s.updateBanner)
-        if (s.updateProgress != null) {
-          Spacer(Modifier.height(8.dp))
-          Box(Modifier.fillMaxWidth().height(3.dp).clip(CircleShape).background(Ork.rule)) {
-            Box(Modifier.fillMaxWidth(s.updateProgress.coerceIn(0f, 1f)).height(3.dp).background(Ork.ink))
-          }
-        }
-      }
-    }
 
-    Text("Capabilities", style = OrkType.label, modifier = Modifier.padding(top = 28.dp, bottom = 4.dp))
+    Text("Device", style = OrkType.label, modifier = Modifier.padding(top = 28.dp, bottom = 4.dp))
     CapRow(first = true, icon = OrkIcons.eye, title = "Screen & shell (Shizuku)", ok = s.shizuku, onClick = onShizukuAction)
     CapRow(first = false, icon = OrkIcons.folder, title = "Folder access", ok = s.files, onClick = onPickFolder)
     CapRow(first = false, icon = OrkIcons.camera, title = "Camera", ok = s.camera, onClick = onOpenCameraPerm)
 
     Text("Recent", style = OrkType.label, modifier = Modifier.padding(top = 28.dp, bottom = 4.dp))
     if (s.recent.isEmpty()) {
-      Text("No requests yet. They show up here as your agent makes them.", style = OrkType.label, modifier = Modifier.padding(vertical = 12.dp))
+      Text(
+        "No activity yet. Relay jobs and on-device tool calls show up here.",
+        style = OrkType.label,
+        modifier = Modifier.padding(vertical = 12.dp),
+      )
     }
     s.recent.forEachIndexed { i, j ->
       OrkRow(first = i == 0, vertical = 12.dp) {
         Text(j.tool, style = OrkType.mono)
-        Text(j.detail, style = OrkType.label, modifier = Modifier.padding(top = 2.dp))
+        if (j.detail.isNotBlank()) {
+          Text(j.detail, style = OrkType.label, modifier = Modifier.padding(top = 2.dp))
+        }
       }
     }
     Spacer(Modifier.height(24.dp))
@@ -335,6 +356,13 @@ data class SettingsState(
   val updateIndeterminate: Boolean = false,
   val updateBusy: Boolean = false,
   val updateActionLabel: String = "Check for updates",
+  val agentBaseUrl: String = "",
+  val agentModel: String = "",
+  val agentApiKey: String = "",
+  val agentsUrl: String = "",
+  val agentsStatus: String = "",
+  val agentsLinked: Boolean = false,
+  val fxApproval: String = "fx",
 )
 
 /** F · 100% Compose Settings screen. */
@@ -350,9 +378,18 @@ fun SettingsScreen(
   onForgetAll: () -> Unit,
   onAutoUpdate: (Boolean) -> Unit = {},
   onUpdateAction: () -> Unit = {},
+  onSaveAgent: (baseUrl: String, model: String, apiKey: String) -> Unit = { _, _, _ -> },
+  onPairAgents: (url: String, code: String) -> Unit = { _, _ -> },
+  onUnlinkAgents: () -> Unit = {},
+  onFxApproval: (String) -> Unit = {},
 ) {
   var nameDraft by remember(s.name) { mutableStateOf(s.name) }
   var relayDraft by remember(s.relayUrl) { mutableStateOf(s.relayUrl) }
+  var agentUrlDraft by remember(s.agentBaseUrl) { mutableStateOf(s.agentBaseUrl) }
+  var agentModelDraft by remember(s.agentModel) { mutableStateOf(s.agentModel) }
+  var agentKeyDraft by remember(s.agentApiKey) { mutableStateOf(s.agentApiKey) }
+  var agentsUrlDraft by remember(s.agentsUrl) { mutableStateOf(s.agentsUrl) }
+  var agentsCodeDraft by remember { mutableStateOf("") }
   var devOpen by remember { mutableStateOf(false) }
   var logOpen by remember { mutableStateOf(false) }
   var confirmForget by remember { mutableStateOf(false) }
@@ -384,6 +421,43 @@ fun SettingsScreen(
     OrkRow(first = false, vertical = 12.dp) {
       Text("Device ID", style = OrkType.label)
       Text(s.deviceId.ifBlank { "—" }, style = OrkType.mono, modifier = Modifier.padding(top = 2.dp))
+    }
+
+    Text("On-Device Agent (fx)", style = OrkType.label, modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
+    OrkField(agentUrlDraft, { agentUrlDraft = it }, "Base URL (https://...)", keyboard = KeyboardOptions(keyboardType = KeyboardType.Uri))
+    Spacer(Modifier.height(8.dp))
+    OrkField(agentModelDraft, { agentModelDraft = it }, "Model (e.g. muse-spark-1.3-contributor)")
+    Spacer(Modifier.height(8.dp))
+    OrkField(agentKeyDraft, { agentKeyDraft = it }, "API Key")
+    Spacer(Modifier.height(10.dp))
+    OrkPill("Save agent settings", { onSaveAgent(agentUrlDraft.trim(), agentModelDraft.trim(), agentKeyDraft.trim()) }, kind = PillKind.Quiet, small = true)
+
+    Text("Approvals", style = OrkType.label, modifier = Modifier.padding(top = 20.dp, bottom = 4.dp))
+    OrkRow(
+      first = true,
+      modifier = Modifier.clickable(role = Role.Button) { onFxApproval("fx") },
+      trailing = { if (s.fxApproval == "fx") Icon(OrkIcons.check, null, tint = Ork.ink, modifier = Modifier.size(18.dp)) },
+    ) {
+      OrkRowText("Let fx decide", "fx reviews each command with your model before it runs.")
+    }
+    OrkRow(
+      first = false,
+      modifier = Modifier.clickable(role = Role.Button) { onFxApproval("ask") },
+      trailing = { if (s.fxApproval == "ask") Icon(OrkIcons.check, null, tint = Ork.ink, modifier = Modifier.size(18.dp)) },
+    ) {
+      OrkRowText("Always ask me", "Every command fx runs shows a card first.")
+    }
+
+    Text("Agents Hub (ACP)", style = OrkType.label, modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
+    OrkField(agentsUrlDraft, { agentsUrlDraft = it }, "Agents URL (https://...)", keyboard = KeyboardOptions(keyboardType = KeyboardType.Uri))
+    Spacer(Modifier.height(8.dp))
+    OrkField(agentsCodeDraft, { agentsCodeDraft = it }, "Pair Code", keyboard = KeyboardOptions(capitalization = KeyboardCapitalization.Characters))
+    Spacer(Modifier.height(8.dp))
+    Text(if (s.agentsStatus.isBlank()) "Not linked" else s.agentsStatus, style = OrkType.mono.copy(color = Ork.caption))
+    Spacer(Modifier.height(10.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+      OrkPill("Link", { onPairAgents(agentsUrlDraft.trim(), agentsCodeDraft.trim()) }, kind = PillKind.Quiet, small = true, enabled = agentsUrlDraft.isNotBlank() && agentsCodeDraft.isNotBlank())
+      OrkPill("Unlink", onUnlinkAgents, kind = PillKind.Quiet, small = true, enabled = s.agentsLinked)
     }
 
     Text("Safety", style = OrkType.label, modifier = Modifier.padding(top = 20.dp, bottom = 4.dp))

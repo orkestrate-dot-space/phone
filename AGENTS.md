@@ -28,4 +28,8 @@ dev loop counts as a standing order while it is active — otherwise ask.
 - Approval cards complete ONLY on a real on-glass tap. No API path may fake one.
 - Pairing codes: minted only by the relay's `pair` tool or `phone pair` CLI (control unix socket), never over HTTP (tunnel visitors look loopback).
 - Token never leaves prefs + Authorization header. Keys never in logs/journals.
-- Shell tier extends privilege, never authorization: same card, same policy.
+- Shell tier extends privilege, never authorization: commands from a remote
+  machine through the relay always use the card policy, completed only by a
+  real on-glass tap. The on-device fx agent may instead have its commands
+  approved by fx's auto-mode reviewer when the user picks "Let fx decide"
+  (the default); "Always ask me" restores the card for every fx command.

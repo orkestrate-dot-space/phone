@@ -1,5 +1,7 @@
 {
-  "versionCode": 48,
-  "versionName": "0.21.3",
-  "notes": "Auto Tunnel-to-LAN upgrade on Wi-Fi, pre-bound Shizuku Binder daemon, observe({ find, diff }), and 5-tool MCP docs."
+  "versionCode": 59,
+  "versionName": "0.23.6",
+  "sha256": "4e9f930b49c7c9c055f534361603702824fda8beb6c70264586b9bd2e00a2b55",
+  "size": 9006692,
+  "notes": "Use a fast model to review the on-device agent's commands, so Let fx decide works."
 }

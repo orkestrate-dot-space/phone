@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -303,21 +304,23 @@ fun OrkField(
   modifier: Modifier = Modifier,
   error: Boolean = false,
   keyboard: KeyboardOptions = KeyboardOptions.Default,
+  singleLine: Boolean = true,
+  maxLines: Int = 1,
   trailing: (@Composable RowScope.() -> Unit)? = null,
 ) {
   val shape = RoundedCornerShape(Ork.rControl)
   Row(
-    modifier.fillMaxWidth().heightIn(min = 48.dp).clip(shape).background(Ork.fieldFill)
+    modifier.fillMaxWidth().widthIn(min = 0.dp).heightIn(min = 48.dp).clip(shape).background(Ork.fieldFill)
       .border(1.dp, if (error) Ork.destructive else Ork.controlEdge, shape)
       .padding(start = 16.dp, end = 8.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
-    Box(Modifier.weight(1f).padding(vertical = 12.dp)) {
+    Box(Modifier.weight(1f).widthIn(min = 0.dp).padding(vertical = 12.dp)) {
       if (value.isEmpty()) Text(placeholder, style = OrkType.mono.copy(color = Ork.caption))
       BasicTextField(
-        value = value, onValueChange = onValueChange, singleLine = true,
+        value = value, onValueChange = onValueChange, singleLine = singleLine, maxLines = maxLines,
         textStyle = OrkType.mono, cursorBrush = SolidColor(Ork.ink), keyboardOptions = keyboard,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().widthIn(min = 0.dp),
       )
     }
     trailing?.invoke(this)

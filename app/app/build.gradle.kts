@@ -20,8 +20,14 @@ android {
     applicationId = "space.orkestrate.phone"
     minSdk = 29
     targetSdk = 36
-    versionCode = 48
-    versionName = "0.21.3"
+    versionCode = 59
+    versionName = "0.23.6"
+  }
+
+  packaging {
+    jniLibs {
+      useLegacyPackaging = true
+    }
   }
 
   buildFeatures {
@@ -68,7 +74,6 @@ dependencies {
   implementation(composeBom)
   implementation("androidx.compose.ui:ui")
   implementation("androidx.compose.material3:material3")
-  implementation("androidx.compose.ui:ui-tooling-preview")
   implementation("androidx.activity:activity-compose:1.10.1")
   implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
   implementation("androidx.documentfile:documentfile:1.0.1")

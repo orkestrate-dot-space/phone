@@ -44,10 +44,14 @@ class RelayService : Service() {
       @Suppress("DEPRECATION") startForeground(1, n)
     }
     app.relay.connect()
+    if (app.store.agentsToken != null) {
+      app.acpBridge.connect()
+    }
     return START_STICKY
   }
 
   override fun onDestroy() {
+    app.acpBridge.disconnect()
     app.relay.disconnect()
     super.onDestroy()
   }
@@ -82,7 +86,10 @@ class RelayService : Service() {
     override fun onLog(s: String) { app.uiListener?.onLog(s) }
     override fun onApproval(jobId: String, capability: String) {
       notifyApproval(jobId, capability)
-      if (capability == "exec.run") {
+      // Local MCP shell approvals already passed the shared gate (Relay
+      // decided auto-vs-card); never auto-run them on the relay path, or one
+      // tap could execute twice. They go straight to the same on-glass card.
+      if (capability == "exec.run" && !app.relay.isLocalShellApproval(jobId)) {
         val argv = app.relay.jobParams(jobId)
           ?.optJSONArray("argv")
           ?.let { a -> (0 until a.length()).map { a.getString(it) } }

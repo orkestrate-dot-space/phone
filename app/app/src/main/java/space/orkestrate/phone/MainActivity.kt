@@ -147,6 +147,7 @@ class MainActivity : ComponentActivity(), Relay.Listener {
     shizuku = app.shizuku
     app.uiListener = this
     app.updater.onChange = { runOnUiThread { syncUi() } }
+    app.acpBridge.onStatus = { runOnUiThread { syncUi() } }
 
     try {
       Shizuku.addBinderReceivedListenerSticky(shizukuBinderListener)
@@ -178,6 +179,7 @@ class MainActivity : ComponentActivity(), Relay.Listener {
     super.onResume()
     app.uiListener = this
     app.updater.onChange = { runOnUiThread { syncUi() } }
+    app.acpBridge.onStatus = { runOnUiThread { syncUi() } }
     ui.cameraGranted = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
     relay.sendState()
     app.updater.maybeAutoCheck()
@@ -200,6 +202,12 @@ class MainActivity : ComponentActivity(), Relay.Listener {
   private fun handleDeepLink(i: Intent?) {
     val d = i?.data ?: return
     val parsed = PairingUri.parse(d.toString()) ?: return
+    if (parsed.agents) {
+      navMode = Route.Settings
+      syncUi()
+      pairAgents(parsed.relay, parsed.code)
+      return
+    }
     navMode = Route.EnterCode
     ui.enter = ui.enter.copy(relay = parsed.relay, code = parsed.code, error = null)
     syncUi()
@@ -339,6 +347,8 @@ class MainActivity : ComponentActivity(), Relay.Listener {
         UpdatePhase.Downloading, UpdatePhase.Installing -> app.updater.state.progress
         else -> null
       },
+      agentsStatus = app.acpBridge.status,
+      agentsLinked = store.agentsToken != null,
     )
 
     val pkg = packageManager.getPackageInfo(packageName, 0)
@@ -358,6 +368,13 @@ class MainActivity : ComponentActivity(), Relay.Listener {
       updateStatus = u.message.ifBlank { "v${pkg.versionName} (build $vc)" },
       updateProgress = if (u.phase == UpdatePhase.Downloading) u.progress else null,
       updateIndeterminate = u.phase == UpdatePhase.Checking || u.phase == UpdatePhase.Installing,
+      agentBaseUrl = store.agentBaseUrl,
+      agentModel = store.agentModel,
+      agentApiKey = store.agentApiKey ?: "",
+      agentsUrl = store.agentsUrl ?: "",
+      agentsStatus = app.acpBridge.status,
+      agentsLinked = store.agentsToken != null,
+      fxApproval = store.fxApproval,
       updateBusy = u.phase == UpdatePhase.Checking || u.phase == UpdatePhase.Downloading || u.phase == UpdatePhase.Installing,
       updateActionLabel = when (u.phase) {
         UpdatePhase.Available -> if (shizukuOk) "Install v${u.latestVersionName}" else "Download v${u.latestVersionName}"
@@ -378,10 +395,17 @@ class MainActivity : ComponentActivity(), Relay.Listener {
       val parsed = PairingUri.parse(raw)
       if (parsed == null) {
         hapticReject()
-        ui.scanError = "That QR code is not a Phone MCP pairing link."
+        ui.scanError = "That QR code is not a pairing link."
         return
       }
       hapticConfirm()
+      if (parsed.agents) {
+        navMode = null
+        ui.scanError = null
+        syncUi()
+        pairAgents(parsed.relay, parsed.code)
+        return
+      }
       navMode = Route.EnterCode
       ui.enter = ui.enter.copy(relay = parsed.relay, code = parsed.code, error = null)
       syncUi()
@@ -469,6 +493,35 @@ class MainActivity : ComponentActivity(), Relay.Listener {
     }
     override fun approve(jobId: String) { hapticConfirm(); ui.approval = null; cardActions.remove(jobId)?.first?.invoke() }
     override fun reject(jobId: String) { hapticReject(); ui.approval = null; cardActions.remove(jobId)?.second?.invoke() }
+    override fun saveAgent(baseUrl: String, model: String, apiKey: String) {
+      if (baseUrl.isNotBlank()) store.agentBaseUrl = baseUrl
+      if (model.isNotBlank()) store.agentModel = model
+      store.agentApiKey = apiKey.ifBlank { null }
+      toast("Agent settings saved")
+      syncUi()
+    }
+    override fun saveAgentsUrl(url: String) {
+      if (url.isNotBlank()) store.agentsUrl = url.trim().trimEnd('/')
+      syncUi()
+    }
+    override fun pairAgents(url: String, code: String) {
+      this@MainActivity.pairAgents(url, code)
+    }
+    override fun unlinkAgents() {
+      app.acpBridge.disconnect()
+      store.agentsToken = null
+      store.agentsPeerId = null
+      toast("Agents hub unlinked")
+      syncUi()
+    }
+    override fun fxApproval(mode: String) { store.fxApproval = mode; syncUi() }
+  }
+
+  private fun pairAgents(url: String, code: String) {
+    if (url.isBlank() || code.isBlank()) { toast("Enter Agents URL and pair code"); return }
+    app.acpBridge.pair(url, code) { ok, msg ->
+      runOnUiThread { toast(msg); log(msg); syncUi() }
+    }
   }
 
   private fun requestBgExemption() {
@@ -492,11 +545,18 @@ class MainActivity : ComponentActivity(), Relay.Listener {
     }
   }
 
-  private fun showCard(card: ApprovalCard, onApprove: () -> Unit) {
+  private fun showCard(
+    card: ApprovalCard,
+    onApprove: () -> Unit,
+    onReject: (() -> Unit)? = null,
+  ) {
     cardActions[card.jobId] = onApprove to {
-      relay.reject(card.jobId)
-      cancelNotif(card.jobId)
-      log("rejected ${card.jobId}")
+      if (onReject != null) onReject()
+      else {
+        relay.reject(card.jobId)
+        cancelNotif(card.jobId)
+        log("rejected ${card.jobId}")
+      }
     }
     ui.approval = card
   }
@@ -507,14 +567,14 @@ class MainActivity : ComponentActivity(), Relay.Listener {
       when (capability) {
         "human.handoff" -> {
           val msg = relay.jobParams(jobId)?.optString("message", "Complete this step on your phone.") ?: "Complete this step on your phone."
-          showCard(ApprovalCard(jobId, "Agent needs you.", msg, listOf("Tool" to "human.handoff"), "Continue", false)) {
+          showCard(ApprovalCard(jobId, "Agent needs you.", msg, listOf("Tool" to "human.handoff"), "Continue", false), onApprove = {
             cancelNotif(jobId)
             relay.approve(jobId, JSONObject().put("continued", true))
-          }
+          })
         }
         "files.op" -> {
           val path = relay.jobParams(jobId)?.optString("path", "") ?: ""
-          showCard(ApprovalCard(jobId, "Delete this file?", "This cannot be undone.", listOf("Tool" to "files.op", "Path" to path), "Delete file", false)) {
+          showCard(ApprovalCard(jobId, "Delete this file?", "This cannot be undone.", listOf("Tool" to "files.op", "Path" to path), "Delete file", false), onApprove = {
             cancelNotif(jobId)
             Thread {
               try {
@@ -524,24 +584,43 @@ class MainActivity : ComponentActivity(), Relay.Listener {
                 relay.reject(jobId, e.message ?: "delete failed")
               }
             }.start()
-          }
+          })
         }
         "exec.run" -> {
+          if (relay.isLocalShellApproval(jobId)) {
+            // Loopback MCP `shell`: same on-glass card. Only these two taps
+            // settle it; nothing else may call decideLocalShell.
+            val cmd = relay.jobParams(jobId)?.optString("cmd", "") ?: ""
+            showCard(
+              ApprovalCard(jobId, "Run a command?", "On-device agent request.", listOf("Tool" to "shell", "Command" to cmd), "Run command", false),
+              onApprove = {
+                cancelNotif(jobId)
+                relay.decideLocalShell(jobId, true)
+                log("approved $jobId")
+              },
+              onReject = {
+                relay.decideLocalShell(jobId, false)
+                cancelNotif(jobId)
+                log("rejected $jobId")
+              },
+            )
+            return@runOnUiThread
+          }
           val argv = relay.jobParams(jobId)?.optJSONArray("argv")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList()
           val tier = if (shizuku.hasPermission()) "shizuku" else "app sandbox"
-          showCard(ApprovalCard(jobId, "Run a command?", "Runs as $tier.", listOf("Tool" to "exec.run", "Command" to argv.joinToString(" ")), "Run command", false)) {
+          showCard(ApprovalCard(jobId, "Run a command?", "Runs as $tier.", listOf("Tool" to "exec.run", "Command" to argv.joinToString(" ")), "Run command", false), onApprove = {
             ExecRunner(this, relay, shizuku, store).runExec(jobId, argv, object : ExecRunner.Sink {
               override fun note(s: String) = runOnUiThread { log(s) }
             })
-          }
+          })
         }
         else -> {
           val p = relay.jobParams(jobId)
           pendingMaxPx = p?.optInt("maxPx", 1280) ?: 1280
           pendingQuality = p?.optInt("quality", 80) ?: 80
-          showCard(ApprovalCard(jobId, "Take a photo?", "Nothing is captured until you take it.", listOf("Tool" to "photo.capture", "Size" to "$pendingMaxPx px, JPEG"), "Open camera", true)) {
+          showCard(ApprovalCard(jobId, "Take a photo?", "Nothing is captured until you take it.", listOf("Tool" to "photo.capture", "Size" to "$pendingMaxPx px, JPEG"), "Open camera", true), onApprove = {
             startShot(jobId)
-          }
+          })
         }
       }
     }

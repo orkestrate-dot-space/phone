@@ -3,3 +3,4 @@ local.properties
 build/
 app/build/
 .mise/
+app/src/main/jniLibs/arm64-v8a/libfx.so

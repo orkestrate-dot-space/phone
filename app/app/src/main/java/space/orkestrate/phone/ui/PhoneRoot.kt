@@ -52,6 +52,11 @@ interface PhoneUiActions {
   fun updateAction()
   fun approve(jobId: String)
   fun reject(jobId: String)
+  fun saveAgent(baseUrl: String, model: String, apiKey: String)
+  fun saveAgentsUrl(url: String) {}
+  fun pairAgents(url: String, code: String) {}
+  fun unlinkAgents() {}
+  fun fxApproval(mode: String) {}
 }
 
 @Composable
@@ -97,6 +102,10 @@ fun PhoneRoot(m: PhoneUiModel, a: PhoneUiActions) {
         a::forgetAll,
         a::autoUpdate,
         a::updateAction,
+        a::saveAgent,
+        a::pairAgents,
+        a::unlinkAgents,
+        a::fxApproval,
       )
     }
     m.approval?.let { card -> ApprovalSheet(card, { a.approve(card.jobId) }, { a.reject(card.jobId) }) }

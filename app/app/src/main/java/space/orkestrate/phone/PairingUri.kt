@@ -4,13 +4,14 @@ import org.json.JSONObject
 import java.net.URI
 import java.net.URLDecoder
 
-data class ParsedPair(val relay: String, val code: String)
+data class ParsedPair(val relay: String, val code: String, val agents: Boolean = false)
 
 /**
  * Pure parser for pairing links, QR payloads, and pasted text.
  * Accepts:
  * - https://mobile.orkestrate.space/phone/pair#code=...&relay=...
  * - phone://pair?code=...&relay=...
+ * - agents://pair?code=...&url=... (Agents Hub link; pairs the ACP bridge)
  * - {"code":"...","relay":"..."}
  */
 object PairingUri {
@@ -46,6 +47,13 @@ object PairingUri {
     }
 
     val uri = try { URI(text) } catch (_: Exception) { return null }
+    if (uri.scheme == "agents" && uri.host == "pair") {
+      val params = parseQuery(uri.rawQuery ?: "")
+      val code = normalizeCode(params["code"] ?: return null)
+      val url = (params["url"] ?: return null).trim().trimEnd('/')
+      if (code.length != 8 || url.isBlank()) return null
+      return ParsedPair(url, code, agents = true)
+    }
     val queryStr = when {
       uri.scheme == "phone" && uri.host == "pair" -> uri.rawQuery
       (uri.scheme == "https" || uri.scheme == "http") && (uri.path ?: "").startsWith("/phone/pair") ->
