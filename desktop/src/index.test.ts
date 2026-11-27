@@ -3,7 +3,10 @@ import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  adbAct,
   adbFiles,
+  adbInstall,
+  adbObserve,
   adbShell,
   assertJailedRemotePath,
   formatCompactTree,
@@ -275,10 +278,125 @@ describe("adb driver (no live phone/adb daemon)", () => {
     expect(content[1]).toEqual({ type: "image", data: "ZmFrZXBuZw==", mimeType: "image/png" });
   });
 
+  test("adbInstall validates apkPath before spawning adb", async () => {
+    await expect(adbInstall("emulator-5554", "")).rejects.toThrow(/apkPath is required/);
+    await expect(adbInstall("emulator-5554", "/tmp/does-not-exist-orkestrate.apk")).rejects.toThrow(/APK not found/);
+  });
+
   test("toMcpContent defaults to image/jpeg and skips image block when absent", () => {
     const withDefault = toMcpContent({ tree: "x", screenshot_b64: "eA==" });
     expect(withDefault[1]).toEqual({ type: "image", data: "eA==", mimeType: "image/jpeg" });
     const plain = toMcpContent({ tree: "x" });
     expect(plain).toEqual([{ type: "text", text: JSON.stringify({ tree: "x" }, null, 2) }]);
+  });
+});
+
+describe("adb AX upgrade v0.24.2", () => {
+  const XML = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="com.example" content-desc="" checkable="false" checked="false" clickable="false" enabled="true" focusable="false" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[0,0][1080,2400]">
+    <node index="0" text="Hello" resource-id="" class="android.widget.TextView" package="com.example" content-desc="" checkable="false" checked="false" clickable="false" focusable="false" focused="false" scrollable="false" bounds="[100,200][980,300]" />
+    <node index="1" text="OK" resource-id="" class="android.widget.Button" package="com.example" content-desc="" checkable="false" checked="false" clickable="true" focusable="true" focused="false" scrollable="false" bounds="[100,700][500,800]" />
+    <node index="2" text="" resource-id="" class="android.widget.EditText" package="com.example" content-desc="" checkable="false" checked="false" clickable="true" focusable="true" focused="true" scrollable="false" bounds="[100,900][980,1000]" />
+  </node>
+</hierarchy>`;
+  const enc = new TextEncoder();
+
+  function mockSpawn(rec: string[][], dumpXml: string = XML) {
+    const origSpawnSync = Bun.spawnSync;
+    const origSleepSync = (Bun as any).sleepSync;
+    const sleepCalls: number[] = [];
+    (Bun as any).sleepSync = (ms: number) => { sleepCalls.push(ms); };
+    (Bun as any).spawnSync = (cmd: string[], _opts?: unknown) => {
+      rec.push(cmd);
+      const joined = cmd.join(" ");
+      if (joined.includes("uiautomator") && joined.includes("dump")) {
+        return { exitCode: 0, stdout: enc.encode(dumpXml), stderr: enc.encode("") };
+      }
+      return { exitCode: 0, stdout: enc.encode(""), stderr: enc.encode("") };
+    };
+    return () => {
+      (Bun as any).spawnSync = origSpawnSync;
+      (Bun as any).sleepSync = origSleepSync;
+      return sleepCalls;
+    };
+  }
+
+  test("compact screen output omits nodes unless verbose: true", async () => {
+    const rec: string[][] = [];
+    const restore = mockSpawn(rec);
+    try {
+      const compact = await adbObserve("v242-serial", { include: ["screen"] });
+      expect("nodes" in compact).toBe(false);
+      expect(compact.package).toBe("com.example");
+      expect(typeof compact.tree).toBe("string");
+      expect((compact.tree as string)).toContain("@e");
+      // refs still work: cache populated internally
+      const hit = resolveAdbRef("v242-serial", "@e2");
+      expect(hit.x).toBe(300);
+      const verbose = await adbObserve("v242-serial", { include: ["screen"], verbose: true });
+      expect(Array.isArray((verbose as Record<string, unknown>).nodes)).toBe(true);
+      expect(((verbose as Record<string, unknown>).nodes as unknown[])).toHaveLength(3);
+    } finally {
+      restore();
+      lastNodesBySerial.delete("v242-serial");
+    }
+  });
+
+  test('adbAct "back" / "home" shorthand and case-insensitive key normalization ("BACK")', () => {
+    const rec: string[][] = [];
+    const restore = mockSpawn(rec);
+    try {
+      const b = adbAct("s1", { action: "back" });
+      expect(b).toEqual({ ok: true, action: "back" });
+      expect(rec.at(-1)?.join(" ")).toContain("keyevent 4");
+
+      const h = adbAct("s1", { action: "home" });
+      expect(h).toEqual({ ok: true, action: "home" });
+      expect(rec.at(-1)?.join(" ")).toContain("keyevent 3");
+
+      const r = adbAct("s1", { action: "recents" });
+      expect(r).toEqual({ ok: true, action: "recents" });
+      expect(rec.at(-1)?.join(" ")).toContain("keyevent 187");
+
+      const k = adbAct("s1", { action: "key", key: "BACK" });
+      expect(k).toEqual({ ok: true, action: "key", key: "back" });
+      expect(rec.at(-1)?.join(" ")).toContain("keyevent 4");
+
+      const k2 = adbAct("s1", { action: "key", key: "  Home " });
+      expect(k2).toEqual({ ok: true, action: "key", key: "home" });
+      expect(rec.at(-1)?.join(" ")).toContain("keyevent 3");
+    } finally {
+      restore();
+    }
+  });
+
+  test('adbAct "type" with clear: true and ref/x,y tap-first behavior', () => {
+    const rec: string[][] = [];
+    const restore = mockSpawn(rec);
+    try {
+      lastNodesBySerial.set("s2", parseUiAutomatorXml(XML));
+
+      // ref + clear: tap @e2 (300,750), sleep 150, Ctrl+A, DEL, then text
+      rec.length = 0;
+      const out = adbAct("s2", { action: "type", ref: "@e2", text: "hi", clear: true });
+      expect(out).toEqual({ ok: true, action: "type", typed: 2, submitted: false });
+      expect(rec.length).toBe(4);
+      expect(rec[0].join(" ")).toContain("input tap 300 750");
+      expect(rec[1].join(" ")).toContain("keycombination 113 29");
+      expect(rec[2].join(" ")).toContain("keyevent 67");
+      expect(rec[3].join(" ")).toContain("input text hi");
+
+      // x/y without clear: tap first, then text, no clear seq
+      rec.length = 0;
+      adbAct("s2", { action: "type", x: 100, y: 200, text: "yo" });
+      expect(rec.length).toBe(2);
+      expect(rec[0].join(" ")).toContain("input tap 100 200");
+      expect(rec[1].join(" ")).toContain("input text yo");
+      expect(rec.join(" ")).not.toContain("keycombination");
+    } finally {
+      restore();
+      lastNodesBySerial.delete("s2");
+    }
   });
 });

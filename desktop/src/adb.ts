@@ -265,7 +265,7 @@ export function resolveAdbRef(serial: string, ref: string): { x: number; y: numb
 
 // ---- observe ----
 
-function adbScreen(serial: string): Record<string, unknown> {
+function adbScreen(serial: string, opts?: { verbose?: boolean }): Record<string, unknown> {
   let xml = "";
   try {
     xml = spawnAdb(["-s", serial, "exec-out", "uiautomator", "dump", "/dev/tty"]).out;
@@ -283,9 +283,8 @@ function adbScreen(serial: string): Record<string, unknown> {
   }
   if (!xml.includes("<hierarchy")) {
     const secure = /FLAG_SECURE|secure/i.test(xml);
-    return {
+    const base: Record<string, unknown> = {
       package: "",
-      nodes: [],
       tree: "",
       blocked: true,
       secureScreen: true,
@@ -293,13 +292,22 @@ function adbScreen(serial: string): Record<string, unknown> {
         ? "screen is FLAG_SECURE (banking/DRM): uiautomator cannot see it — use handoff"
         : "uiautomator dump failed (screen off? locked?) — wake/unlock the device, or use handoff",
     };
+    if (opts?.verbose === true) base.nodes = [];
+    return base;
   }
   const nodes = parseUiAutomatorXml(xml);
   lastNodesBySerial.set(serial, nodes);
   const counts = new Map<string, number>();
   for (const n of nodes) if (n.package) counts.set(n.package, (counts.get(n.package) ?? 0) + 1);
   const pkg = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
-  return { package: pkg, nodes, tree: formatCompactTree(nodes), blocked: false, secureScreen: false };
+  const base: Record<string, unknown> = {
+    package: pkg,
+    tree: formatCompactTree(nodes),
+    blocked: false,
+    secureScreen: false,
+  };
+  if (opts?.verbose === true) base.nodes = nodes;
+  return base;
 }
 
 async function adbScreenshot(serial: string): Promise<Record<string, unknown>> {
@@ -391,13 +399,14 @@ export type AdbObserveParams = {
   include?: string[];
   query?: string;
   find?: string;
+  verbose?: boolean;
 };
 
 /** Observe a device over ADB. Screen failures degrade to secureScreen instead of crashing. */
 export async function adbObserve(serial: string, params?: AdbObserveParams): Promise<Record<string, unknown>> {
   const inc = new Set(Array.isArray(params?.include) && params.include.length ? params.include : ["screen"]);
   const out: Record<string, unknown> = {};
-  if (inc.has("screen")) Object.assign(out, adbScreen(serial));
+  if (inc.has("screen")) Object.assign(out, adbScreen(serial, { verbose: params?.verbose === true }));
   if (inc.has("screenshot")) {
     try {
       Object.assign(out, await adbScreenshot(serial));
@@ -458,15 +467,17 @@ export function adbAct(serial: string, step: Record<string, unknown>): Record<st
       return { ok: true, action, x, y, durationMs: 600 };
     }
     case "type": {
-      if (typeof step.ref === "string" && step.ref.trim()) {
-        const { x, y } = resolveAdbRef(serial, step.ref);
+      if (typeof step.ref === "string" && (step.ref as string).trim()) {
+        const { x, y } = resolveAdbRef(serial, step.ref as string);
         runAdbText(["-s", serial, "shell", "input", "tap", String(x), String(y)]);
+        Bun.sleepSync(150);
       } else if (typeof step.x === "number" && typeof step.y === "number") {
-        runAdbText(["-s", serial, "shell", "input", "tap", String(Math.round(step.x)), String(Math.round(step.y))]);
+        runAdbText(["-s", serial, "shell", "input", "tap", String(Math.round(step.x as number)), String(Math.round(step.y as number))]);
+        Bun.sleepSync(150);
       }
-      if (step.clear) {
-        runAdbText(["-s", serial, "shell", "input", "keyevent", "123"]); // MOVE_END
-        runAdbText(["-s", serial, "shell", "for i in $(seq 1 40); do input keyevent 67; done"]);
+      if (step.clear === true) {
+        runAdbText(["-s", serial, "shell", "input", "keycombination", "113", "29"]);
+        runAdbText(["-s", serial, "shell", "input", "keyevent", "67"]);
       }
       const text = String(step.text ?? "");
       if (text) runAdbText(["-s", serial, "shell", "input", "text", escapeInputText(text)]);
@@ -502,11 +513,18 @@ export function adbAct(serial: string, step: Record<string, unknown>): Record<st
       return { ok: true, action };
     }
     case "key": {
-      const k = String(step.key ?? "");
+      const k = String(step.key ?? "").trim().toLowerCase();
       const code = KEYCODES[k];
       if (!code) throw new Error(`bad key "${k}": use back, home, recents, or enter`);
       runAdbText(["-s", serial, "shell", "input", "keyevent", code]);
       return { ok: true, action, key: k };
+    }
+    case "back":
+    case "home":
+    case "recents": {
+      const code = KEYCODES[action];
+      runAdbText(["-s", serial, "shell", "input", "keyevent", code]);
+      return { ok: true, action };
     }
     case "open": {
       if (typeof step.url === "string" && step.url.trim()) {
@@ -521,7 +539,7 @@ export function adbAct(serial: string, step: Record<string, unknown>): Record<st
       throw new Error(`open needs url ("https://...") or package ("com.example.app")`);
     }
     default:
-      throw new Error(`unsupported adb action "${action}": use tap, long_press, type, scroll, swipe, key, or open`);
+      throw new Error(`unsupported adb action "${action}": use tap, long_press, type, scroll, swipe, key, back, home, recents, or open`);
   }
 }
 
@@ -666,6 +684,24 @@ export async function adbHandoff(serial: string, message: string): Promise<Recor
     // screenshot is best-effort; the handoff itself must not fail
   }
   return res;
+}
+
+export async function adbInstall(serial: string, apkPath: string): Promise<{ ok: true; device: string; apk: string; output: string }> {
+  const path = String(apkPath ?? "").trim();
+  if (!path) throw new Error("apkPath is required");
+  let st;
+  try {
+    st = statSync(path);
+  } catch {
+    throw new Error(`APK not found: ${path}`);
+  }
+  if (!st.isFile()) throw new Error(`Not a file: ${path}`);
+  const r = spawnAdb(["-s", serial, "install", "-r", path]);
+  const out = `${r.out}\n${r.err}`.trim();
+  if (r.code !== 0 || /\bFailure\b/i.test(out)) {
+    throw new Error(`adb install failed: ${out || `exit ${r.code}`}`);
+  }
+  return { ok: true, device: serial, apk: path, output: out || "Success" };
 }
 
 // ---- MCP content: native image blocks (base64 stays out of the JSON text) ----

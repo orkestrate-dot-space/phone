@@ -20,6 +20,7 @@ import {
   adbAct,
   adbFiles,
   adbHandoff,
+  adbInstall,
   adbObserve,
   adbShell,
   formatCompactTree,
@@ -70,7 +71,7 @@ async function remoteCall(name: string, params?: unknown): Promise<any> {
 const CLI = new Set([
   "pair", "wait", "device", "battery", "screen", "act", "apps", "files",
   "notifications", "clipboard", "handoff", "status", "doctor", "revoke",
-  "photo", "exec", "devices", "install-app", "observe", "shell",
+  "photo", "exec", "devices", "install", "install-app", "observe", "shell",
 ]);
 const CLI_TOOL: Record<string, string> = { wait: "pair_wait", photo: "capture_photo", devices: "pair_list" };
 
@@ -126,6 +127,25 @@ async function installAppViaAdb(args: string[]) {
 }
 
 async function runCli(cmd: string, args: string[]) {
+  if (cmd === "install") {
+    let device: string | undefined;
+    let apkPath = "";
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (a === "--device" && args[i + 1]) {
+        device = args[++i];
+      } else if (a.startsWith("--device=")) {
+        device = a.slice(9);
+      } else if (!a.startsWith("--") && !apkPath) {
+        apkPath = a;
+      }
+    }
+    if (!apkPath) throw new Error("usage: phone install <apkPath> [--device <serial>]");
+    const serial = resolveAdbDevice(device);
+    const out = await adbInstall(serial, apkPath);
+    console.log(JSON.stringify(out, null, 2));
+    return;
+  }
   if (cmd === "install-app") {
     await installAppViaAdb(args);
     return;
@@ -468,19 +488,20 @@ const TOOLS = [
         query: { type: "string" },
         find: { type: "string", description: "Filter UI tree lines case-insensitively" },
         diff: { type: "boolean", description: "Return only UI tree lines added/changed since the last observe" },
+        verbose: { type: "boolean", description: "Include full nodes JSON array (default false; compact tree only)" },
       },
       additionalProperties: false,
     },
   },
   {
     name: "act",
-    description: "Perform one or more UI/app/clipboard actions (tap, long_press, type, scroll, swipe, key, open, clipboard_get, clipboard_set, dismiss_notification). Supports batched steps[] and returns the settled UI tree by default (observe: true).",
+    description: "Perform one or more UI/app/clipboard actions (tap, long_press, type, scroll, swipe, key, back, home, recents, open, clipboard_get, clipboard_set, dismiss_notification). back/home/recents are shorthand for key presses (KEYCODE_BACK/HOME/APP_SWITCH). Supports batched steps[] and returns the settled UI tree by default (observe: true).",
     inputSchema: {
       type: "object",
       properties: {
         action: {
           type: "string",
-          enum: ["tap", "long_press", "type", "scroll", "swipe", "key", "open", "clipboard_get", "clipboard_set", "dismiss_notification"],
+          enum: ["tap", "long_press", "type", "scroll", "swipe", "key", "back", "home", "recents", "open", "clipboard_get", "clipboard_set", "dismiss_notification"],
         },
         ref: { type: "string" },
         text: { type: "string" },
@@ -488,7 +509,7 @@ const TOOLS = [
         y: { type: "number" },
         x2: { type: "number" },
         y2: { type: "number" },
-        clear: { type: "boolean" },
+        clear: { type: "boolean", description: "For type: select-all + delete before typing (default false)" },
         submit: { type: "boolean" },
         direction: { type: "string", enum: ["up", "down", "left", "right"] },
         key: { type: "string", enum: ["back", "home", "recents", "enter"] },
@@ -496,6 +517,7 @@ const TOOLS = [
         url: { type: "string" },
         steps: { type: "array", items: { type: "object" } },
         observe: { type: "boolean" },
+        verbose: { type: "boolean", description: "Include full nodes JSON array in returned screen (default false)" },
         device: { type: "string", description: "Paired relay device id/name, or ADB serial/model. Defaults to the online relay device, else the ADB device." },
       },
       additionalProperties: false,
@@ -752,8 +774,10 @@ async function localCall(rawName: string, params?: any) {
     if (t.kind === "adb") {
       const res = await adbObserve(t.serial, {
         include: params?.screenshot ? ["screen", "screenshot"] : ["screen"],
+        verbose: params?.verbose === true,
       });
       if (!params?.inlineBase64) delete res.screenshot_b64;
+      if (params?.verbose !== true) delete res.nodes;
       return res;
     }
     const dev = t.dev;
@@ -762,6 +786,7 @@ async function localCall(rawName: string, params?: any) {
       maxPx: params?.maxPx ?? 1080,
       quality: params?.quality ?? 75,
     }) as Record<string, unknown>;
+    if (params?.verbose !== true) delete res.nodes;
     if (typeof res.screenshot_b64 === "string") {
       const buf = Buffer.from(res.screenshot_b64, "base64");
       const outPath = `${tmpdir()}/phone-screen-${b64url(rand(6))}.jpg`;
@@ -923,7 +948,9 @@ async function localCall(rawName: string, params?: any) {
         include: [...inc],
         query: params?.query,
         find: params?.find,
+        verbose: params?.verbose === true,
       });
+      if (params?.verbose !== true) delete r.nodes;
       if (typeof r.tree === "string" && r.tree && params?.diff) {
         const key = `adb:${t.serial}`;
         const prev = lastTreeByDevice.get(key);
@@ -948,11 +975,15 @@ async function localCall(rawName: string, params?: any) {
         quality: params?.quality,
         device: dev.id,
         inlineBase64: params?.inlineBase64,
+        verbose: params?.verbose === true,
       }).then((s) => {
         out.package = s.package ?? "";
         out.blocked = s.blocked ?? false;
         out.secureScreen = s.secureScreen ?? false;
         if (s.reason) out.reason = s.reason;
+        if (params?.verbose === true && Array.isArray((s as Record<string, unknown>).nodes)) {
+          out.nodes = (s as Record<string, unknown>).nodes;
+        }
         if (Array.isArray(s.nodes)) {
           let tree = formatCompactTree(s.nodes as any[]);
           const prev = lastTreeByDevice.get(dev.id);
@@ -996,7 +1027,8 @@ async function localCall(rawName: string, params?: any) {
       const res: Record<string, unknown> = { ok: true, transport: "adb", device: t.serial, results };
       if (params?.observe !== false) {
         await Bun.sleep(250);
-        res.screen = await adbObserve(t.serial, { include: ["screen"] });
+        res.screen = await adbObserve(t.serial, { include: ["screen"], verbose: params?.verbose === true });
+        if (params?.verbose !== true) delete (res.screen as Record<string, unknown>).nodes;
       }
       return res;
     }
@@ -1024,7 +1056,8 @@ async function localCall(rawName: string, params?: any) {
     const res: Record<string, unknown> = { ok: true, results };
     if (uiTouched && params?.observe !== false) {
       await Bun.sleep(250);
-      res.screen = await localCall("phone.observe", { include: ["screen"], device: dev.id });
+      res.screen = await localCall("phone.observe", { include: ["screen"], device: dev.id, verbose: params?.verbose === true });
+      if (params?.verbose !== true) delete (res.screen as Record<string, unknown>).nodes;
     }
     return res;
   }

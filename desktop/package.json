@@ -1,6 +1,6 @@
 {
   "name": "@orkestrate/phone",
-  "version": "0.24.0",
+  "version": "0.24.2",
   "description": "Phone MCP: 5-tool MCP server, relay, and CLI for Android",
   "license": "MIT",
   "type": "module",
